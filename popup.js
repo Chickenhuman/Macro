@@ -33,6 +33,8 @@ let currentData = {
   }
 };
 
+let editingStepIndex = null;
+
 function setResult(text) {
   resultBox.textContent = text;
 }
@@ -74,6 +76,8 @@ function describeStep(step) {
       return `입력: ${step.label || step.selector || "(selector 없음)"} → ${JSON.stringify(step.value ?? "")}`;
     case "select":
       return `선택: ${step.label || step.selector || "(selector 없음)"} → ${JSON.stringify(step.value ?? "")}`;
+    case "dropdownSelect":
+      return `드롭다운 선택: ${step.label || step.selector || "(selector 없음)"} → ${JSON.stringify(step.value ?? "")}`;
     case "wait":
       return `대기: ${step.ms || 0}ms`;
     case "waitFor":
@@ -135,6 +139,146 @@ async function clearSteps() {
   await loadData();
 }
 
+function cloneStep(step) {
+  return JSON.parse(JSON.stringify(step || {}));
+}
+
+function getEditableFields(step) {
+  if (!step || !step.type) return [];
+
+  switch (step.type) {
+    case "wait":
+      return [
+        { key: "ms", label: "대기 시간(ms)", type: "number", min: 0 }
+      ];
+    case "waitFor":
+      return [
+        { key: "selector", label: "셀렉터", type: "text" },
+        { key: "timeout", label: "최대 대기(ms)", type: "number", min: 0 },
+        { key: "interval", label: "확인 간격(ms)", type: "number", min: 0 }
+      ];
+    case "waitForPopup":
+      return [
+        { key: "urlIncludes", label: "URL 포함 문자열", type: "text" },
+        { key: "timeout", label: "최대 대기(ms)", type: "number", min: 0 }
+      ];
+    case "input":
+    case "select":
+    case "dropdownSelect":
+      return [
+        { key: "label", label: "표시 이름", type: "text" },
+        { key: "selector", label: "셀렉터", type: "text" },
+        { key: "value", label: "값", type: "text" },
+        { key: "timeout", label: "최대 대기(ms)", type: "number", min: 0 }
+      ];
+    case "click":
+      return [
+        { key: "label", label: "표시 이름", type: "text" },
+        { key: "selector", label: "셀렉터", type: "text" },
+        { key: "timeout", label: "최대 대기(ms)", type: "number", min: 0 }
+      ];
+    default:
+      return [];
+  }
+}
+
+function parseEditorValue(rawValue, field) {
+  if (field.type === "number") {
+    const value = Number(rawValue);
+    if (!Number.isFinite(value)) {
+      throw new Error(`${field.label} 값이 올바르지 않습니다.`);
+    }
+    if (typeof field.min === "number" && value < field.min) {
+      throw new Error(`${field.label} 값은 ${field.min} 이상이어야 합니다.`);
+    }
+    return value;
+  }
+
+  return String(rawValue ?? "");
+}
+
+async function saveEditedStep(index, fieldDefs, editorRoot) {
+  const steps = Array.isArray(currentData.steps) ? currentData.steps : [];
+  const targetStep = steps[index];
+
+  if (!targetStep) {
+    throw new Error("수정할 step을 찾지 못했습니다.");
+  }
+
+  const nextStep = cloneStep(targetStep);
+
+  for (const field of fieldDefs) {
+    const input = editorRoot.querySelector(`[data-field="${field.key}"]`);
+    if (!input) continue;
+    nextStep[field.key] = parseEditorValue(input.value, field);
+  }
+
+  const nextSteps = [...steps];
+  nextSteps[index] = nextStep;
+  editingStepIndex = null;
+  await setSteps(nextSteps);
+  setResult(`${index + 1}번 step 수정 완료`);
+}
+
+function renderStepEditor(item, step, index, steps) {
+  const fieldDefs = getEditableFields(step);
+  if (!fieldDefs.length || editingStepIndex !== index) {
+    return;
+  }
+
+  const editor = document.createElement("div");
+  editor.className = "step-editor";
+
+  fieldDefs.forEach((field) => {
+    const row = document.createElement("div");
+    row.className = "step-editor-row";
+
+    const label = document.createElement("label");
+    label.textContent = field.label;
+
+    const input = document.createElement("input");
+    input.type = field.type === "number" ? "number" : "text";
+    input.value = String(step[field.key] ?? "");
+    input.setAttribute("data-field", field.key);
+    if (field.type === "number") {
+      input.step = "1";
+      if (typeof field.min === "number") {
+        input.min = String(field.min);
+      }
+    }
+
+    row.appendChild(label);
+    row.appendChild(input);
+    editor.appendChild(row);
+  });
+
+  const editorActions = document.createElement("div");
+  editorActions.className = "step-editor-actions";
+
+  const saveBtn = document.createElement("button");
+  saveBtn.textContent = "저장";
+  saveBtn.className = "primary";
+  saveBtn.addEventListener("click", async () => {
+    try {
+      await saveEditedStep(index, fieldDefs, editor);
+    } catch (error) {
+      setResult(`오류: ${error.message || String(error)}`);
+    }
+  });
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "취소";
+  cancelBtn.addEventListener("click", () => {
+    editingStepIndex = null;
+    renderSteps();
+  });
+
+  editorActions.appendChild(saveBtn);
+  editorActions.appendChild(cancelBtn);
+  editor.appendChild(editorActions);
+  item.appendChild(editor);
+}
+
 function renderSteps() {
   const steps = Array.isArray(currentData.steps) ? currentData.steps : [];
 
@@ -185,15 +329,29 @@ function renderSteps() {
     deleteBtn.textContent = "삭제";
     deleteBtn.addEventListener("click", async () => {
       const next = steps.filter((_, i) => i !== index);
+      if (editingStepIndex === index) {
+        editingStepIndex = null;
+      } else if (typeof editingStepIndex === "number" && editingStepIndex > index) {
+        editingStepIndex -= 1;
+      }
       await setSteps(next);
+    });
+
+    const editBtn = document.createElement("button");
+    editBtn.textContent = editingStepIndex === index ? "수정 중" : "수정";
+    editBtn.addEventListener("click", () => {
+      editingStepIndex = editingStepIndex === index ? null : index;
+      renderSteps();
     });
 
     actions.appendChild(upBtn);
     actions.appendChild(downBtn);
+    actions.appendChild(editBtn);
     actions.appendChild(deleteBtn);
 
     item.appendChild(main);
     item.appendChild(actions);
+    renderStepEditor(item, step, index, steps);
     stepsList.appendChild(item);
   });
 
@@ -225,6 +383,10 @@ async function loadData() {
       error: ""
     }
   };
+
+  if (typeof editingStepIndex === "number" && editingStepIndex >= currentData.steps.length) {
+    editingStepIndex = null;
+  }
 
   renderStatus();
   renderSteps();
@@ -421,6 +583,7 @@ addWaitForPopupTemplateBtn.addEventListener("click", async () => {
 
 applyJsonBtn.addEventListener("click", async () => {
   try {
+    editingStepIndex = null;
     await applyJson();
   } catch (error) {
     setResult(`오류: ${error.message || String(error)}`);

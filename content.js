@@ -9,6 +9,7 @@
   let overlayRoot = null;
   let overlayTitle = null;
   let overlayBody = null;
+  let pendingDropdownRecord = null;
 
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -88,6 +89,131 @@
     }
 
     return el.tagName.toLowerCase();
+  }
+
+  function normalizeText(value) {
+    return String(value ?? "").replace(/\s+/g, " ").trim();
+  }
+
+  function getElementDisplayValue(el) {
+    if (!(el instanceof Element)) return "";
+
+    if ("value" in el && typeof el.value === "string") {
+      return normalizeText(el.value);
+    }
+
+    const selected = el.querySelector?.(
+      "[aria-selected='true'], .selected, .on, .active, .is-selected"
+    );
+    if (selected) {
+      const selectedText = normalizeText(selected.innerText || selected.textContent || "");
+      if (selectedText) return selectedText;
+    }
+
+    return normalizeText(el.innerText || el.textContent || "");
+  }
+
+  function hasDropdownLikeClassName(el) {
+    const className = typeof el?.className === "string" ? el.className.toLowerCase() : "";
+    if (!className) return false;
+
+    return /(dropdown|combo|combobox|selectbox|select2|chosen|pudd)/.test(className);
+  }
+
+  function isDropdownLikeElement(el) {
+    if (!(el instanceof Element)) return false;
+    if (el.tagName === "SELECT") return false;
+
+    if (
+      el.matches(
+        "[role='combobox'], [aria-haspopup='listbox'], [aria-haspopup='tree'], [data-role='combobox'], [data-role='dropdown']"
+      )
+    ) {
+      return true;
+    }
+
+    if (hasDropdownLikeClassName(el)) {
+      return true;
+    }
+
+    if (el.matches("input[readonly], input[aria-haspopup], input[role='combobox']")) {
+      return true;
+    }
+
+    if (el.querySelector("input[readonly], input[aria-haspopup], input[role='combobox']")) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function getDropdownTriggerTarget(rawTarget) {
+    if (!(rawTarget instanceof Element)) return null;
+
+    let node = rawTarget;
+    while (node && node !== document.documentElement) {
+      if (isDropdownLikeElement(node)) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+
+    return null;
+  }
+
+  function rememberDropdownRecord(trigger) {
+    const selector = buildSelector(trigger);
+    if (!selector) return false;
+
+    pendingDropdownRecord = {
+      selector,
+      label: getHumanLabel(trigger),
+      beforeValue: getElementDisplayValue(trigger),
+      startedAt: Date.now()
+    };
+    return true;
+  }
+
+  async function finalizePendingDropdownRecord() {
+    if (!recordMode || !pendingDropdownRecord) {
+      return false;
+    }
+
+    await delay(180);
+
+    const elapsed = Date.now() - pendingDropdownRecord.startedAt;
+    if (elapsed > 5000) {
+      pendingDropdownRecord = null;
+      return false;
+    }
+
+    let trigger = null;
+    try {
+      trigger = document.querySelector(pendingDropdownRecord.selector);
+    } catch {
+      pendingDropdownRecord = null;
+      return false;
+    }
+
+    if (!trigger) {
+      pendingDropdownRecord = null;
+      return false;
+    }
+
+    const nextValue = getElementDisplayValue(trigger);
+    if (!nextValue || nextValue === pendingDropdownRecord.beforeValue) {
+      return false;
+    }
+
+    await recordAction({
+      type: "dropdownSelect",
+      selector: pendingDropdownRecord.selector,
+      value: nextValue,
+      label: pendingDropdownRecord.label || getHumanLabel(trigger)
+    });
+
+    pendingDropdownRecord = null;
+    return true;
   }
 
   function buildNthPathSelector(el) {
@@ -237,6 +363,8 @@
       setOverlay("매크로 기록 중", `입력 기록: ${step.label || step.selector}`);
     } else if (step.type === "select") {
       setOverlay("매크로 기록 중", `선택 기록: ${step.label || step.selector}`);
+    } else if (step.type === "dropdownSelect") {
+      setOverlay("매크로 기록 중", `드롭다운 선택 기록: ${step.label || step.selector}`);
     } else if (step.type === "wait") {
       setOverlay("매크로 기록 중", `대기 기록: ${step.ms}ms`);
     }
@@ -343,6 +471,19 @@
     async (event) => {
       if (!recordMode) return;
 
+      const dropdownTrigger = getDropdownTriggerTarget(event.target);
+      if (dropdownTrigger) {
+        rememberDropdownRecord(dropdownTrigger);
+        return;
+      }
+
+      if (pendingDropdownRecord) {
+        const recorded = await finalizePendingDropdownRecord();
+        if (recorded) {
+          return;
+        }
+      }
+
       const el = getClickableTarget(event.target);
       if (!el) return;
 
@@ -362,6 +503,10 @@
     "change",
     async (event) => {
       if (!recordMode) return;
+
+      if (pendingDropdownRecord) {
+        await finalizePendingDropdownRecord();
+      }
 
       const el = getInputTarget(event.target);
       if (!el) return;
@@ -564,6 +709,115 @@
     }
   }
 
+  function isDropdownOptionCandidate(el) {
+    if (!(el instanceof Element)) return false;
+
+    if (
+      el.matches(
+        "[role='option'], [role='treeitem'], [role='menuitem'], li, button, a, td, div, span"
+      )
+    ) {
+      return true;
+    }
+
+    return hasDropdownLikeClassName(el);
+  }
+
+  function scoreDropdownOptionCandidate(el, expected) {
+    if (!(el instanceof Element)) return -1;
+    if (!isVisible(el)) return -1;
+
+    const text = normalizeText(el.innerText || el.textContent || "");
+    if (!text) return -1;
+
+    const normalizedExpected = normalizeText(expected);
+    if (!normalizedExpected) return -1;
+
+    if (text !== normalizedExpected && !text.includes(normalizedExpected)) {
+      return -1;
+    }
+
+    let score = 0;
+
+    if (text === normalizedExpected) score += 100;
+    if (el.matches("[role='option'], [role='treeitem'], [role='menuitem']")) score += 40;
+    if (el.closest("[role='listbox'], [role='tree'], [role='menu']")) score += 30;
+    if (el.matches("li, button, a")) score += 20;
+    if (hasDropdownLikeClassName(el) || hasDropdownLikeClassName(el.parentElement)) score += 10;
+
+    return score;
+  }
+
+  async function waitForDropdownOption(value, timeout = 10000, interval = 200) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeout) {
+      const candidates = [...document.querySelectorAll("body *")];
+      let best = null;
+      let bestScore = -1;
+
+      for (const candidate of candidates) {
+        if (!isDropdownOptionCandidate(candidate)) continue;
+        const score = scoreDropdownOptionCandidate(candidate, value);
+        if (score > bestScore) {
+          best = candidate;
+          bestScore = score;
+        }
+      }
+
+      if (best && bestScore >= 0) {
+        return best;
+      }
+
+      await delay(interval);
+    }
+
+    throw new Error(`드롭다운 옵션을 찾지 못했습니다: ${value}`);
+  }
+
+  async function doDropdownSelect(step) {
+    const raw = await waitForElement(step.selector, step.timeout || 10000);
+    const trigger = resolveVisibleClickTarget(raw) || getDropdownTriggerTarget(raw) || raw;
+
+    if (!trigger) {
+      throw new Error(`드롭다운 트리거를 찾지 못했습니다: ${step.selector}`);
+    }
+
+    const beforeValue = getElementDisplayValue(trigger);
+
+    trigger.scrollIntoView({
+      block: "center",
+      inline: "center"
+    });
+
+    await delay(200);
+    trigger.focus?.();
+    fireMouseSequence(trigger);
+    await delay(250);
+
+    const option = await waitForDropdownOption(step.value ?? "", step.timeout || 10000, 200);
+    option.scrollIntoView({
+      block: "center",
+      inline: "center"
+    });
+
+    await delay(120);
+    option.focus?.();
+    fireMouseSequence(option);
+    await delay(250);
+
+    const nextValue = getElementDisplayValue(trigger);
+    if (nextValue && normalizeText(step.value) && nextValue.includes(normalizeText(step.value))) {
+      return;
+    }
+
+    if (beforeValue !== nextValue) {
+      return;
+    }
+
+    throw new Error(`드롭다운 값이 변경되지 않았습니다: ${step.value}`);
+  }
+
   async function doClick(step) {
     const raw = await waitForElement(step.selector, step.timeout || 10000);
 
@@ -634,6 +888,8 @@
         return `[${n}] 입력: ${step.label || step.selector}`;
       case "select":
         return `[${n}] 선택: ${step.label || step.selector}`;
+      case "dropdownSelect":
+        return `[${n}] 드롭다운 선택: ${step.label || step.selector}`;
       case "wait":
         return `[${n}] 대기: ${step.ms || 0}ms`;
       case "waitFor":
@@ -657,6 +913,8 @@
       await doInput(step);
     } else if (step.type === "select") {
       await doSelect(step);
+    } else if (step.type === "dropdownSelect") {
+      await doDropdownSelect(step);
     } else if (step.type === "wait") {
       await doWait(step);
     } else if (step.type === "waitFor") {
@@ -679,6 +937,7 @@
         if (message?.type === "START_RECORD") {
           recordMode = true;
           lastRecordedAt = null;
+          pendingDropdownRecord = null;
           setOverlay("매크로 기록 중", "페이지에서 버튼을 클릭하거나 값을 입력하세요.");
           sendResponse({ ok: true });
           return;
@@ -687,6 +946,7 @@
         if (message?.type === "STOP_RECORD") {
           recordMode = false;
           lastRecordedAt = null;
+          pendingDropdownRecord = null;
           removeOverlay();
           sendResponse({ ok: true });
           return;

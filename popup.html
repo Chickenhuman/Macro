@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Easy Web Macro Recorder</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 14px;
+      width: 440px;
+      font-family: Arial, sans-serif;
+      color: #222;
+      background: #fafafa;
+    }
+
+    h1 {
+      font-size: 18px;
+      margin: 0 0 10px 0;
+    }
+
+    .sub {
+      font-size: 12px;
+      color: #555;
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+
+    .panel {
+      background: #fff;
+      border: 1px solid #e4e4e4;
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 58px;
+      height: 24px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #fff;
+      background: #6b7280;
+    }
+
+    .badge.recording {
+      background: #d93025;
+    }
+
+    .status-text {
+      font-size: 13px;
+      color: #333;
+      line-height: 1.5;
+    }
+
+    .button-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .button-grid.two {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    button {
+      height: 36px;
+      border: 1px solid #d6d6d6;
+      background: #fff;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    button.primary {
+      background: #1a73e8;
+      border-color: #1a73e8;
+      color: #fff;
+      font-weight: 700;
+    }
+
+    button.danger {
+      background: #fff3f2;
+      border-color: #f0c7c3;
+      color: #b42318;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .steps-meta {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 8px;
+    }
+
+    .empty {
+      padding: 12px;
+      border: 1px dashed #d7d7d7;
+      border-radius: 10px;
+      background: #fcfcfc;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #666;
+    }
+
+    .steps-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .step-item {
+      border: 1px solid #e5e5e5;
+      background: #fff;
+      border-radius: 10px;
+      padding: 10px;
+    }
+
+    .step-main {
+      font-size: 12px;
+      line-height: 1.55;
+      word-break: break-word;
+      margin-bottom: 8px;
+    }
+
+    .step-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .step-actions button {
+      height: 30px;
+      font-size: 12px;
+      flex: 1;
+    }
+
+    details {
+      margin-top: 4px;
+    }
+
+    summary {
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 220px;
+      resize: vertical;
+      border: 1px solid #d8d8d8;
+      border-radius: 10px;
+      padding: 10px;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      background: #fff;
+    }
+
+    .footer-note {
+      font-size: 11px;
+      color: #666;
+      line-height: 1.5;
+      margin-top: 8px;
+    }
+
+    #resultBox {
+      margin-top: 8px;
+      padding: 10px;
+      border-radius: 10px;
+      background: #f6f8fa;
+      border: 1px solid #e2e6ea;
+      font-size: 12px;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      max-height: 180px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>Easy Web Macro Recorder</h1>
+  <div class="sub">
+    기록 시작을 누른 뒤 페이지에서 직접 클릭하거나 값을 바꾸면 자동으로 step이 쌓입니다.<br>
+    현재 탭에서 새 창이 열리면 그 창도 자동 기록/실행 대상으로 연결됩니다.
+  </div>
+
+  <div class="panel">
+    <div class="status-row">
+      <div id="statusBadge" class="badge">대기</div>
+      <div id="statusText" class="status-text">기록 중이 아니며 실행도 진행 중이 아닙니다.</div>
+    </div>
+
+    <div class="button-grid">
+      <button id="startRecordBtn" class="primary">기록 시작</button>
+      <button id="stopRecordBtn">기록 종료</button>
+      <button id="runBtn">지금 실행</button>
+    </div>
+
+    <div class="button-grid two">
+      <button id="clearBtn" class="danger">기록 전체 삭제</button>
+      <button id="refreshBtn">새로고침</button>
+    </div>
+
+    <div class="footer-note">
+      기록을 시작하면 팝업은 닫혀도 됩니다. 페이지와 관련 새 창에서 작업을 기록한 뒤 확장을 다시 열어 종료하면 됩니다.
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="section-title">빠른 추가</div>
+    <div class="button-grid">
+      <button data-wait="500">대기 0.5초</button>
+      <button data-wait="1000">대기 1초</button>
+      <button data-wait="2000">대기 2초</button>
+    </div>
+    <div class="button-grid two" style="margin-top:8px;">
+      <button data-wait="5000">대기 5초</button>
+      <button id="addWaitForTemplateBtn">waitFor 예시 추가</button>
+    </div>
+    <div class="button-grid two" style="margin-top:8px;">
+      <button id="addWaitForPopupTemplateBtn">waitForPopup 예시 추가</button>
+      <button disabled>새 창 자동감지 사용</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="section-title">기록된 step</div>
+    <div id="stepsMeta" class="steps-meta">0개</div>
+    <div id="emptyBox" class="empty">
+      아직 기록된 step이 없습니다.<br>
+      보통은 아래 순서로 사용하면 됩니다.<br><br>
+      1) 기록 전체 삭제<br>
+      2) 기록 시작<br>
+      3) 페이지에서 버튼 클릭 / 입력 / 선택<br>
+      4) 새 창이 뜨면 그 창에서도 계속 작업<br>
+      5) 기록 종료<br>
+      6) 지금 실행
+    </div>
+    <div id="stepsList" class="steps-list" style="display:none;"></div>
+  </div>
+
+  <div class="panel">
+    <details>
+      <summary>고급 편집(JSON)</summary>
+      <textarea id="jsonEditor"></textarea>
+      <div class="button-grid two" style="margin-top:8px;">
+        <button id="applyJsonBtn">JSON 반영</button>
+        <button id="copyJsonBtn">JSON 복사</button>
+      </div>
+      <div class="footer-note">
+        지원 타입: click, input, select, wait, waitFor, waitForPopup
+      </div>
+    </details>
+  </div>
+
+  <div class="panel">
+    <div class="section-title">실행 결과</div>
+    <div id="resultBox">준비됨</div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

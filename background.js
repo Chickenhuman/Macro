@@ -411,6 +411,38 @@ async function startRecordingOnTab(tabId) {
   }
 }
 
+async function bootstrapRecordingSession(tabId) {
+  try {
+    await startRecordingOnTab(tabId);
+  } catch (error) {
+    try {
+      await appendErrorLog(error?.message || String(error), "recording:start");
+    } catch {
+      // ignore logging failure
+    }
+  }
+
+  try {
+    await attachRecordingToExistingRelatedTabs(tabId);
+  } catch (error) {
+    const current = await getRecordingState();
+    if (current.enabled) {
+      const latestTabs = await chrome.tabs.query({});
+      await setRecordingState({
+        ...current,
+        initializing: false,
+        knownTabIdsAtStart: latestTabs.map((item) => item.id).filter(isFiniteTabId)
+      });
+    }
+
+    try {
+      await appendErrorLog(error?.message || String(error), "recording:attach");
+    } catch {
+      // ignore logging failure
+    }
+  }
+}
+
 async function stopRecordingOnTab(tabId) {
   if (!isFiniteTabId(tabId)) return;
 
@@ -1044,8 +1076,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             throw new Error("이 페이지에서는 확장을 주입할 수 없습니다.");
           }
 
-          await startRecordingOnTab(tabId);
-
           await setRecordingState({
             enabled: true,
             initializing: true,
@@ -1060,25 +1090,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             popupStepRecordedTabIds: []
           });
 
-          await updateBadge();
-
           sendResponse({
             ok: true,
             recording: await getRecordingState()
           });
 
-          attachRecordingToExistingRelatedTabs(tabId).catch(async () => {
-            const current = await getRecordingState();
-            if (current.enabled) {
-              const latestTabs = await chrome.tabs.query({});
-              await setRecordingState({
-                ...current,
-                initializing: false,
-                knownTabIdsAtStart: latestTabs.map((item) => item.id).filter(isFiniteTabId)
-              });
-            }
+          updateBadge().catch(() => {
+            // ignore badge failure
+          });
 
-            // 초기 연결 실패는 치명적이지 않음. 추후 onUpdated에서 재시도한다.
+          bootstrapRecordingSession(tabId).catch(() => {
+            // 개별 내부 단계에서 자체 로그/정리를 수행한다.
           });
           return;
         }

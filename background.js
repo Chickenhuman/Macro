@@ -5,6 +5,7 @@ const POPUP_WAIT_ALARM = "macroPopupWaitTimeout";
 
 const DEFAULT_RECORDING_STATE = {
   enabled: false,
+  initializing: false,
   rootTabId: null,
   rootWindowId: null,
   rootOrigin: "",
@@ -159,6 +160,7 @@ async function setRecordingState(state) {
   nextState.popupStepRecordedTabIds = uniqTabIds(nextState.popupStepRecordedTabIds);
 
   if (!nextState.enabled) {
+    nextState.initializing = false;
     nextState.rootTabId = null;
     nextState.rootWindowId = null;
     nextState.rootOrigin = "";
@@ -443,14 +445,22 @@ async function attachRecordingToExistingRelatedTabs(rootTabId) {
     }
   }
 
+  const latestTabs = await chrome.tabs.query({});
+
   return await setRecordingState({
     ...recording,
+    initializing: false,
+    knownTabIdsAtStart: latestTabs.map((tab) => tab.id).filter(isFiniteTabId),
     trackedTabIds: [...tracked]
   });
 }
 
 function getRecordingAttachDecision(tab, recording) {
   if (!recording?.enabled) {
+    return { shouldAttach: false, shouldAppendWait: false };
+  }
+
+  if (recording.initializing) {
     return { shouldAttach: false, shouldAppendWait: false };
   }
 
@@ -966,6 +976,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           await setRecordingState({
             enabled: true,
+            initializing: true,
             rootTabId: tabId,
             rootWindowId: isFiniteTabId(tab.windowId) ? tab.windowId : null,
             rootOrigin: getUrlOrigin(tab.url || ""),
@@ -977,13 +988,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             popupStepRecordedTabIds: []
           });
 
-          const nextState = await attachRecordingToExistingRelatedTabs(tabId);
-
           await updateBadge();
 
           sendResponse({
             ok: true,
-            recording: nextState
+            recording: await getRecordingState()
+          });
+
+          attachRecordingToExistingRelatedTabs(tabId).catch(async () => {
+            const current = await getRecordingState();
+            if (current.enabled) {
+              const latestTabs = await chrome.tabs.query({});
+              await setRecordingState({
+                ...current,
+                initializing: false,
+                knownTabIdsAtStart: latestTabs.map((item) => item.id).filter(isFiniteTabId)
+              });
+            }
+
+            // 초기 연결 실패는 치명적이지 않음. 추후 onUpdated에서 재시도한다.
           });
           return;
         }

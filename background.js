@@ -2,6 +2,8 @@ const STEPS_KEY = "macroSteps";
 const RECORDING_KEY = "macroRecordingState";
 const RUN_KEY = "macroRunState";
 const ERROR_LOGS_KEY = "macroErrorLogs";
+const DEBUG_STATE_KEY = "macroDebugState";
+const DEBUG_LOGS_KEY = "macroDebugLogs";
 const POPUP_WAIT_ALARM = "macroPopupWaitTimeout";
 
 const DEFAULT_RECORDING_STATE = {
@@ -36,6 +38,10 @@ const DEFAULT_RUN_STATE = {
   error: "",
   pendingPopupTabIds: [],
   knownTabIdsAtWaitStart: []
+};
+
+const DEFAULT_DEBUG_STATE = {
+  enabled: false
 };
 
 function delay(ms) {
@@ -188,14 +194,48 @@ async function getRunState() {
   };
 }
 
+async function getDebugState() {
+  const data = await chrome.storage.local.get(DEBUG_STATE_KEY);
+  return {
+    ...DEFAULT_DEBUG_STATE,
+    ...(data[DEBUG_STATE_KEY] || {})
+  };
+}
+
+async function setDebugState(state) {
+  const nextState = {
+    ...DEFAULT_DEBUG_STATE,
+    ...(state || {})
+  };
+
+  nextState.enabled = !!nextState.enabled;
+
+  await chrome.storage.local.set({
+    [DEBUG_STATE_KEY]: nextState
+  });
+
+  return nextState;
+}
+
 async function getErrorLogs() {
   const data = await chrome.storage.local.get(ERROR_LOGS_KEY);
   return Array.isArray(data[ERROR_LOGS_KEY]) ? data[ERROR_LOGS_KEY] : [];
 }
 
+async function getDebugLogs() {
+  const data = await chrome.storage.local.get(DEBUG_LOGS_KEY);
+  return Array.isArray(data[DEBUG_LOGS_KEY]) ? data[DEBUG_LOGS_KEY] : [];
+}
+
 async function setErrorLogs(entries) {
   await chrome.storage.local.set({
     [ERROR_LOGS_KEY]: Array.isArray(entries) ? entries.slice(-100) : []
+  });
+}
+
+async function setDebugLogs(entries) {
+  await chrome.storage.local.set({
+    [DEBUG_LOGS_KEY]: Array.isArray(entries) ? entries.slice(-200) : []
   });
 }
 
@@ -214,6 +254,32 @@ async function appendErrorLog(message, source = "runtime") {
   ].slice(-100);
 
   await setErrorLogs(next);
+  return next;
+}
+
+async function appendDebugLog(entry) {
+  const current = await getDebugLogs();
+  const nextEntry = {
+    at: Date.now(),
+    source: String(entry?.source || "content:event"),
+    eventType: String(entry?.eventType || "event"),
+    pageUrl: String(entry?.pageUrl || ""),
+    target: entry?.target || null,
+    ancestors: Array.isArray(entry?.ancestors) ? entry.ancestors.slice(0, 8) : [],
+    clickableTarget: entry?.clickableTarget || null,
+    clickableSelector: typeof entry?.clickableSelector === "string" ? entry.clickableSelector : "",
+    checkboxTarget: entry?.checkboxTarget || null,
+    checkboxSelector: typeof entry?.checkboxSelector === "string" ? entry.checkboxSelector : "",
+    dropdownTarget: entry?.dropdownTarget || null,
+    dropdownSelector: typeof entry?.dropdownSelector === "string" ? entry.dropdownSelector : "",
+    inputTarget: entry?.inputTarget || null,
+    inputSelector: typeof entry?.inputSelector === "string" ? entry.inputSelector : "",
+    note: typeof entry?.note === "string" ? entry.note : "",
+    recordedStep: entry?.recordedStep || null
+  };
+
+  const next = [...current, nextEntry].slice(-200);
+  await setDebugLogs(next);
   return next;
 }
 
@@ -401,13 +467,31 @@ async function ensureContentReady(tabId, retries = 4) {
 
 async function startRecordingOnTab(tabId) {
   await ensureContentReady(tabId);
+  const debugState = await getDebugState();
 
   const response = await sendTabMessageWithReconnect(tabId, {
-    type: "START_RECORD"
+    type: "START_RECORD",
+    debugEnabled: !!debugState.enabled
   });
 
   if (!response?.ok) {
     throw new Error(response?.message || "기록 시작 실패");
+  }
+}
+
+async function broadcastDebugMode(enabled) {
+  const recording = await getRecordingState();
+  const tracked = uniqTabIds(recording.trackedTabIds);
+
+  for (const tabId of tracked) {
+    try {
+      await sendTabMessage(tabId, {
+        type: "SET_DEBUG_MODE",
+        enabled: !!enabled
+      });
+    } catch {
+      // ignore missing or unloaded content scripts
+    }
   }
 }
 
@@ -924,7 +1008,9 @@ chrome.runtime.onInstalled.addListener(async () => {
     STEPS_KEY,
     RECORDING_KEY,
     RUN_KEY,
-    ERROR_LOGS_KEY
+    ERROR_LOGS_KEY,
+    DEBUG_STATE_KEY,
+    DEBUG_LOGS_KEY
   ]);
 
   if (!Array.isArray(data[STEPS_KEY])) {
@@ -941,6 +1027,14 @@ chrome.runtime.onInstalled.addListener(async () => {
 
   if (!Array.isArray(data[ERROR_LOGS_KEY])) {
     await setErrorLogs([]);
+  }
+
+  if (!data[DEBUG_STATE_KEY]) {
+    await setDebugState(DEFAULT_DEBUG_STATE);
+  }
+
+  if (!Array.isArray(data[DEBUG_LOGS_KEY])) {
+    await setDebugLogs([]);
   }
 
   await updateBadge();
@@ -1057,11 +1151,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       switch (message?.type) {
         case "GET_DATA": {
-          const [steps, recording, runState, errorLogs] = await Promise.all([
+          const [steps, recording, runState, errorLogs, debug, debugLogs] = await Promise.all([
             getSteps(),
             getRecordingState(),
             getRunState(),
-            getErrorLogs()
+            getErrorLogs(),
+            getDebugState(),
+            getDebugLogs()
           ]);
 
           sendResponse({
@@ -1069,7 +1165,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             steps,
             recording,
             run: runState,
-            errorLogs
+            errorLogs,
+            debug,
+            debugLogs
           });
           return;
         }
@@ -1262,6 +1360,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
+        case "SET_DEBUG_STATE": {
+          const debug = await setDebugState({
+            enabled: !!message.enabled
+          });
+
+          await broadcastDebugMode(debug.enabled);
+
+          sendResponse({
+            ok: true,
+            debug
+          });
+          return;
+        }
+
+        case "APPEND_DEBUG_LOG": {
+          const debugLogs = await appendDebugLog(message.entry || {});
+
+          sendResponse({
+            ok: true,
+            debugLogs
+          });
+          return;
+        }
+
+        case "CLEAR_DEBUG_LOGS": {
+          await setDebugLogs([]);
+
+          sendResponse({
+            ok: true,
+            debugLogs: []
+          });
+          return;
+        }
+
         default: {
           sendResponse({
             ok: false,
@@ -1270,7 +1402,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
     } catch (error) {
-      if (message?.type !== "GET_DATA" && message?.type !== "APPEND_ERROR_LOG") {
+      if (
+        message?.type !== "GET_DATA" &&
+        message?.type !== "APPEND_ERROR_LOG" &&
+        message?.type !== "APPEND_DEBUG_LOG"
+      ) {
         try {
           await appendErrorLog(error?.message || String(error), message?.type || "runtime");
         } catch {

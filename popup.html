@@ -271,6 +271,20 @@
       overflow: auto;
       color: #7a271a;
     }
+
+    #debugLogBox {
+      margin-top: 8px;
+      padding: 10px;
+      border-radius: 10px;
+      background: #f7fbff;
+      border: 1px solid #cfe3f6;
+      font-size: 12px;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      max-height: 220px;
+      overflow: auto;
+      color: #123b64;
+    }
   </style>
 </head>
 <body>
@@ -357,6 +371,22 @@
       <button id="clearErrorLogBtn">오류 로그 삭제</button>
     </div>
     <div id="errorLogBox">오류 로그 없음</div>
+  </div>
+
+  <div class="panel">
+    <div class="section-title">디버그 기록</div>
+    <div class="footer-note">
+      문제가 나는 컨트롤을 재현할 때만 켜세요. 클릭/마우스 이벤트와 판별 결과를 저장합니다.
+    </div>
+    <div class="panel-actions">
+      <button id="toggleDebugBtn">디버그 켜기</button>
+      <button id="copyDebugLogBtn">디버그 로그 복사</button>
+    </div>
+    <div class="panel-actions">
+      <button id="clearDebugLogBtn">디버그 로그 삭제</button>
+      <button id="refreshDebugBtn">디버그 새로고침</button>
+    </div>
+    <div id="debugLogBox">디버그 로그 없음</div>
   </div>
 
   <script src="popup.js"></script>

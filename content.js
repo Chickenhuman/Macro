@@ -5,6 +5,7 @@
   window.__EASY_WEB_MACRO_INSTALLED__ = true;
 
   let recordMode = false;
+  let debugMode = false;
   let lastRecordedAt = null;
   let overlayRoot = null;
   let overlayTitle = null;
@@ -112,6 +113,93 @@
     }
 
     return normalizeText(el.innerText || el.textContent || "");
+  }
+
+  function summarizeElement(el) {
+    if (!(el instanceof Element)) return null;
+
+    const text = normalizeText(el.innerText || el.textContent || el.value || "").slice(0, 80);
+    const className =
+      typeof el.className === "string" ? normalizeText(el.className).slice(0, 120) : "";
+
+    return {
+      tag: el.tagName.toLowerCase(),
+      id: el.id || "",
+      className,
+      role: el.getAttribute("role") || "",
+      type: el.getAttribute("type") || "",
+      name: el.getAttribute("name") || "",
+      ariaLabel: el.getAttribute("aria-label") || "",
+      text
+    };
+  }
+
+  function summarizeAncestors(el, limit = 6) {
+    if (!(el instanceof Element)) return [];
+
+    const items = [];
+    let node = el;
+
+    while (node && node !== document.documentElement && items.length < limit) {
+      const summary = summarizeElement(node);
+      if (summary) {
+        items.push(summary);
+      }
+      node = node.parentElement;
+    }
+
+    return items;
+  }
+
+  function safeBuildSelector(el) {
+    try {
+      return buildSelector(el);
+    } catch {
+      return null;
+    }
+  }
+
+  async function appendDebugLog(entry) {
+    if (!debugMode) return;
+
+    try {
+      await chrome.runtime.sendMessage({
+        type: "APPEND_DEBUG_LOG",
+        entry: {
+          ...entry,
+          source: entry?.source || "content:event",
+          pageUrl: location.href
+        }
+      });
+    } catch {
+      // ignore debug logging failure
+    }
+  }
+
+  function logDebugEvent(eventType, rawTarget, extra = {}) {
+    if (!debugMode) return;
+
+    const target = rawTarget instanceof Element ? rawTarget : null;
+    const checkboxTarget = target ? findCheckboxLikeWrapper(target) : null;
+    const dropdownTarget = target ? getDropdownTriggerTarget(target) : null;
+    const clickableTarget = target ? getClickableTarget(target) : null;
+    const inputTarget = target ? getInputTarget(target) : null;
+
+    appendDebugLog({
+      source: "content:event",
+      eventType,
+      target: summarizeElement(target),
+      ancestors: summarizeAncestors(target),
+      checkboxTarget: summarizeElement(checkboxTarget),
+      checkboxSelector: safeBuildSelector(checkboxTarget) || "",
+      dropdownTarget: summarizeElement(dropdownTarget),
+      dropdownSelector: safeBuildSelector(dropdownTarget) || "",
+      clickableTarget: summarizeElement(clickableTarget),
+      clickableSelector: safeBuildSelector(clickableTarget) || "",
+      inputTarget: summarizeElement(inputTarget),
+      inputSelector: safeBuildSelector(inputTarget) || "",
+      note: extra.note || ""
+    });
   }
 
   function hasDropdownLikeClassName(el) {
@@ -510,7 +598,30 @@
     await persistRecordedSteps(stepsToAppend);
     lastRecordedAt = now;
 
+    appendDebugLog({
+      source: "content:record",
+      eventType: "record",
+      note: describeDebugStep(step),
+      recordedStep: step
+    });
+
     showRecordedMessage(step);
+  }
+
+  function describeDebugStep(step) {
+    if (!step || !step.type) return "";
+
+    if (step.type === "click") {
+      return `click ${step.selector || ""}`.trim();
+    }
+    if (step.type === "input" || step.type === "select" || step.type === "dropdownSelect") {
+      return `${step.type} ${step.selector || ""} ${String(step.value ?? "")}`.trim();
+    }
+    if (step.type === "wait") {
+      return `wait ${step.ms || 0}`;
+    }
+
+    return step.type;
   }
 
   function findCheckboxLikeWrapper(el) {
@@ -603,9 +714,38 @@
   }
 
   document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!recordMode) return;
+      logDebugEvent("pointerdown", event.target);
+    },
+    true
+  );
+
+  document.addEventListener(
+    "mousedown",
+    (event) => {
+      if (!recordMode) return;
+      logDebugEvent("mousedown", event.target);
+    },
+    true
+  );
+
+  document.addEventListener(
+    "mouseup",
+    (event) => {
+      if (!recordMode) return;
+      logDebugEvent("mouseup", event.target);
+    },
+    true
+  );
+
+  document.addEventListener(
     "click",
     async (event) => {
       if (!recordMode) return;
+
+      logDebugEvent("click", event.target);
 
       const checkboxWrapper = findCheckboxLikeWrapper(event.target);
       if (checkboxWrapper) {
@@ -652,6 +792,8 @@
     "change",
     async (event) => {
       if (!recordMode) return;
+
+      logDebugEvent("change", event.target);
 
       if (pendingDropdownRecord) {
         await finalizePendingDropdownRecord();
@@ -1090,6 +1232,7 @@
         }
 
         if (message?.type === "START_RECORD") {
+          debugMode = !!message.debugEnabled;
           recordMode = true;
           lastRecordedAt = null;
           pendingDropdownRecord = null;
@@ -1103,9 +1246,16 @@
             await finalizePendingDropdownRecord();
           }
           recordMode = false;
+          debugMode = false;
           lastRecordedAt = null;
           pendingDropdownRecord = null;
           removeOverlay();
+          sendResponse({ ok: true });
+          return;
+        }
+
+        if (message?.type === "SET_DEBUG_MODE") {
+          debugMode = !!message.enabled;
           sendResponse({ ok: true });
           return;
         }

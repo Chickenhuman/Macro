@@ -18,8 +18,14 @@ const resultBox = document.getElementById("resultBox");
 const copyErrorLogBtn = document.getElementById("copyErrorLogBtn");
 const clearErrorLogBtn = document.getElementById("clearErrorLogBtn");
 const errorLogBox = document.getElementById("errorLogBox");
+const toggleDebugBtn = document.getElementById("toggleDebugBtn");
+const copyDebugLogBtn = document.getElementById("copyDebugLogBtn");
+const clearDebugLogBtn = document.getElementById("clearDebugLogBtn");
+const refreshDebugBtn = document.getElementById("refreshDebugBtn");
+const debugLogBox = document.getElementById("debugLogBox");
 
 const ERROR_LOGS_KEY = "macroErrorLogs";
+const DEBUG_LOGS_KEY = "macroDebugLogs";
 
 let currentData = {
   steps: [],
@@ -36,7 +42,11 @@ let currentData = {
     lastMessage: "대기",
     error: ""
   },
-  errorLogs: []
+  errorLogs: [],
+  debug: {
+    enabled: false
+  },
+  debugLogs: []
 };
 
 let editingStepIndex = null;
@@ -79,8 +89,61 @@ function buildErrorLogText() {
     .join("\n\n");
 }
 
+function formatElementSummary(entry) {
+  if (!entry) return "-";
+
+  const tag = entry.tag || "?";
+  const id = entry.id ? `#${entry.id}` : "";
+  const role = entry.role ? ` role=${entry.role}` : "";
+  const type = entry.type ? ` type=${entry.type}` : "";
+  const text = entry.text ? ` text=${JSON.stringify(entry.text)}` : "";
+  const className = entry.className ? ` class=${JSON.stringify(entry.className)}` : "";
+
+  return `${tag}${id}${role}${type}${text}${className}`.trim();
+}
+
+function buildDebugLogText() {
+  const logs = Array.isArray(currentData.debugLogs) ? currentData.debugLogs : [];
+  if (!logs.length) {
+    return "디버그 로그 없음";
+  }
+
+  return [...logs]
+    .reverse()
+    .map((entry, index) => {
+      const time = formatErrorTimestamp(entry?.at);
+      const lines = [
+        `${index + 1}. [${time || "-"}] ${entry?.source || "content"} / ${entry?.eventType || "-"}`,
+        `url: ${String(entry?.pageUrl || "-")}`,
+        `target: ${formatElementSummary(entry?.target)}`,
+        `ancestors: ${(entry?.ancestors || []).map(formatElementSummary).join(" <- ") || "-"}`,
+        `clickable: ${formatElementSummary(entry?.clickableTarget)}${entry?.clickableSelector ? ` / ${entry.clickableSelector}` : ""}`,
+        `checkbox: ${formatElementSummary(entry?.checkboxTarget)}${entry?.checkboxSelector ? ` / ${entry.checkboxSelector}` : ""}`,
+        `dropdown: ${formatElementSummary(entry?.dropdownTarget)}${entry?.dropdownSelector ? ` / ${entry.dropdownSelector}` : ""}`,
+        `input: ${formatElementSummary(entry?.inputTarget)}${entry?.inputSelector ? ` / ${entry.inputSelector}` : ""}`
+      ];
+
+      if (entry?.note) {
+        lines.push(`note: ${entry.note}`);
+      }
+
+      if (entry?.recordedStep) {
+        lines.push(`recorded: ${JSON.stringify(entry.recordedStep)}`);
+      }
+
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
 function renderErrorLogs() {
   errorLogBox.textContent = buildErrorLogText();
+}
+
+function renderDebugLogs() {
+  debugLogBox.textContent = buildDebugLogText();
+  toggleDebugBtn.textContent = currentData.debug?.enabled ? "디버그 끄기" : "디버그 켜기";
+  toggleDebugBtn.classList.toggle("primary", !!currentData.debug?.enabled);
 }
 
 async function writeErrorLogEntry(message, source = "popup") {
@@ -143,6 +206,45 @@ async function clearErrorLogs() {
 
   currentData.errorLogs = [];
   renderErrorLogs();
+}
+
+async function clearDebugLogs() {
+  try {
+    const response = await sendRuntimeMessage({
+      type: "CLEAR_DEBUG_LOGS"
+    });
+
+    if (response?.ok) {
+      currentData.debugLogs = [];
+      renderDebugLogs();
+      return;
+    }
+  } catch {
+    // storage fallback below
+  }
+
+  await chrome.storage.local.set({
+    [DEBUG_LOGS_KEY]: []
+  });
+
+  currentData.debugLogs = [];
+  renderDebugLogs();
+}
+
+async function setDebugState(enabled) {
+  const response = await sendRuntimeMessage({
+    type: "SET_DEBUG_STATE",
+    enabled: !!enabled
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.message || "디버그 상태 변경 실패");
+  }
+
+  currentData.debug = response.debug || {
+    enabled: !!enabled
+  };
+  renderDebugLogs();
 }
 
 async function handleUiError(error, source = "popup") {
@@ -522,9 +624,13 @@ async function loadData() {
         stepIndex: 0,
         steps: [],
         lastMessage: "대기",
-        error: ""
+      error: ""
       },
-      errorLogs: Array.isArray(response.errorLogs) ? response.errorLogs : []
+      errorLogs: Array.isArray(response.errorLogs) ? response.errorLogs : [],
+      debug: response.debug || {
+        enabled: false
+      },
+      debugLogs: Array.isArray(response.debugLogs) ? response.debugLogs : []
     };
 
     if (typeof editingStepIndex === "number" && editingStepIndex >= currentData.steps.length) {
@@ -534,6 +640,7 @@ async function loadData() {
     renderStatus();
     renderSteps();
     renderErrorLogs();
+    renderDebugLogs();
 
     if (currentData.run?.lastMessage) {
       setResult(currentData.run.lastMessage);
@@ -764,6 +871,42 @@ clearErrorLogBtn.addEventListener("click", async () => {
     setResult("오류 로그 삭제 완료");
   } catch (error) {
     await handleUiError(error, "popup:clearErrorLogs");
+  }
+});
+
+toggleDebugBtn.addEventListener("click", async () => {
+  try {
+    await setDebugState(!currentData.debug?.enabled);
+    setResult(`디버그 ${currentData.debug?.enabled ? "활성화" : "비활성화"}됨`);
+  } catch (error) {
+    await handleUiError(error, "popup:setDebugState");
+  }
+});
+
+copyDebugLogBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(buildDebugLogText());
+    setResult("디버그 로그 복사 완료");
+  } catch (error) {
+    await handleUiError(error, "popup:copyDebugLog");
+  }
+});
+
+clearDebugLogBtn.addEventListener("click", async () => {
+  try {
+    await clearDebugLogs();
+    setResult("디버그 로그 삭제 완료");
+  } catch (error) {
+    await handleUiError(error, "popup:clearDebugLogs");
+  }
+});
+
+refreshDebugBtn.addEventListener("click", async () => {
+  try {
+    await loadData();
+    setResult("디버그 로그 새로고침 완료");
+  } catch (error) {
+    await handleUiError(error, "popup:refreshDebugLogs");
   }
 });
 

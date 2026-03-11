@@ -10,6 +10,7 @@
   let overlayTitle = null;
   let overlayBody = null;
   let pendingDropdownRecord = null;
+  const STEPS_KEY = "macroSteps";
 
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -370,6 +371,102 @@
     }
   }
 
+  function isRetryableRuntimeMessageError(error) {
+    const message = String(error?.message || error || "");
+    return (
+      message.includes("message channel closed before a response was received") ||
+      message.includes("Could not establish connection") ||
+      message.includes("Receiving end does not exist")
+    );
+  }
+
+  function sanitizeRecordedStep(step) {
+    if (!step || typeof step !== "object" || !step.type) {
+      return null;
+    }
+
+    const clean = {
+      type: String(step.type)
+    };
+
+    if (typeof step.selector === "string") clean.selector = step.selector;
+    if (typeof step.value === "string") clean.value = step.value;
+    if (typeof step.label === "string") clean.label = step.label;
+    if (typeof step.timeout === "number") clean.timeout = step.timeout;
+    if (typeof step.interval === "number") clean.interval = step.interval;
+    if (typeof step.ms === "number") clean.ms = step.ms;
+    if (typeof step.urlIncludes === "string") clean.urlIncludes = step.urlIncludes;
+
+    return clean;
+  }
+
+  function sanitizeRecordedSteps(steps) {
+    return Array.isArray(steps) ? steps.map(sanitizeRecordedStep).filter(Boolean) : [];
+  }
+
+  function hasMatchingTail(currentSteps, appendedSteps) {
+    if (!Array.isArray(currentSteps) || !Array.isArray(appendedSteps)) {
+      return false;
+    }
+
+    if (!appendedSteps.length || appendedSteps.length > currentSteps.length) {
+      return false;
+    }
+
+    const offset = currentSteps.length - appendedSteps.length;
+
+    for (let i = 0; i < appendedSteps.length; i += 1) {
+      if (JSON.stringify(currentSteps[offset + i]) !== JSON.stringify(appendedSteps[i])) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  async function appendRecordedStepsDirectly(steps) {
+    const sanitized = sanitizeRecordedSteps(steps);
+    if (!sanitized.length) return [];
+
+    const data = await chrome.storage.local.get(STEPS_KEY);
+    const currentSteps = Array.isArray(data[STEPS_KEY]) ? data[STEPS_KEY] : [];
+
+    if (hasMatchingTail(currentSteps, sanitized)) {
+      return currentSteps;
+    }
+
+    const nextSteps = [...currentSteps, ...sanitized];
+    await chrome.storage.local.set({
+      [STEPS_KEY]: nextSteps
+    });
+
+    return nextSteps;
+  }
+
+  async function persistRecordedSteps(steps) {
+    const sanitized = sanitizeRecordedSteps(steps);
+    if (!sanitized.length) return [];
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "APPEND_STEPS",
+        steps: sanitized
+      });
+
+      if (!response?.ok) {
+        throw new Error(response?.message || "step 저장 실패");
+      }
+
+      return Array.isArray(response.steps) ? response.steps : sanitized;
+    } catch (error) {
+      if (!isRetryableRuntimeMessageError(error)) {
+        throw error;
+      }
+
+      return await appendRecordedStepsDirectly(sanitized);
+    }
+  }
+
   async function recordAction(step) {
     if (!recordMode || !step) return;
 
@@ -387,12 +484,8 @@
     }
 
     stepsToAppend.push(step);
+    await persistRecordedSteps(stepsToAppend);
     lastRecordedAt = now;
-
-    await chrome.runtime.sendMessage({
-      type: "APPEND_STEPS",
-      steps: stepsToAppend
-    });
 
     showRecordedMessage(step);
   }
@@ -976,4 +1069,12 @@
 
     return true;
   });
+
+  if (window.__EASY_WEB_MACRO_TEST_HOOKS__) {
+    Object.assign(window.__EASY_WEB_MACRO_TEST_HOOKS__, {
+      appendRecordedStepsDirectly,
+      isRetryableRuntimeMessageError,
+      persistRecordedSteps
+    });
+  }
 })();

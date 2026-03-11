@@ -411,14 +411,27 @@ async function startRecordingOnTab(tabId) {
   }
 }
 
-async function bootstrapRecordingSession(tabId) {
-  try {
-    await startRecordingOnTab(tabId);
-  } catch (error) {
+async function bootstrapRecordingSession(tabId, options = {}) {
+  if (!options.skipRootStart) {
     try {
-      await appendErrorLog(error?.message || String(error), "recording:start");
-    } catch {
-      // ignore logging failure
+      await startRecordingOnTab(tabId);
+    } catch (error) {
+      const current = await getRecordingState();
+      if (current.enabled && current.rootTabId === tabId) {
+        await setRecordingState(DEFAULT_RECORDING_STATE);
+        try {
+          await updateBadge();
+        } catch {
+          // ignore badge failure
+        }
+      }
+
+      try {
+        await appendErrorLog(error?.message || String(error), "recording:start");
+      } catch {
+        // ignore logging failure
+      }
+      return;
     }
   }
 
@@ -1090,16 +1103,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             popupStepRecordedTabIds: []
           });
 
+          try {
+            await startRecordingOnTab(tabId);
+          } catch (error) {
+            await setRecordingState(DEFAULT_RECORDING_STATE);
+            try {
+              await updateBadge();
+            } catch {
+              // ignore badge failure
+            }
+            throw error;
+          }
+
+          try {
+            await updateBadge();
+          } catch {
+            // ignore badge failure
+          }
+
           sendResponse({
             ok: true,
             recording: await getRecordingState()
           });
 
-          updateBadge().catch(() => {
-            // ignore badge failure
-          });
-
-          bootstrapRecordingSession(tabId).catch(() => {
+          bootstrapRecordingSession(tabId, {
+            skipRootStart: true
+          }).catch(() => {
             // 개별 내부 단계에서 자체 로그/정리를 수행한다.
           });
           return;

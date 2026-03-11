@@ -34,13 +34,39 @@ let currentData = {
 };
 
 let editingStepIndex = null;
+let loadDataPromise = null;
 
 function setResult(text) {
   resultBox.textContent = text;
 }
 
-async function sendRuntimeMessage(message) {
-  return await chrome.runtime.sendMessage(message);
+function isRetryableRuntimeMessageError(error) {
+  const text = String(error?.message || error || "");
+  return (
+    text.includes("message channel closed before a response was received") ||
+    text.includes("Could not establish connection") ||
+    text.includes("Receiving end does not exist")
+  );
+}
+
+async function sendRuntimeMessage(message, retries = 3) {
+  let lastError = null;
+
+  for (let i = 0; i < retries; i += 1) {
+    try {
+      return await chrome.runtime.sendMessage(message);
+    } catch (error) {
+      lastError = error;
+
+      if (!isRetryableRuntimeMessageError(error) || i === retries - 1) {
+        throw error;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+  }
+
+  throw lastError || new Error("메시지 전송 실패");
 }
 
 async function getCurrentTab() {
@@ -359,40 +385,52 @@ function renderSteps() {
 }
 
 async function loadData() {
-  const response = await sendRuntimeMessage({
-    type: "GET_DATA"
-  });
-
-  if (!response?.ok) {
-    throw new Error(response?.message || "데이터를 불러오지 못했습니다.");
+  if (loadDataPromise) {
+    return await loadDataPromise;
   }
 
-  currentData = {
-    steps: Array.isArray(response.steps) ? response.steps : [],
-    recording: response.recording || {
-      enabled: false,
-      rootTabId: null,
-      trackedTabIds: []
-    },
-    run: response.run || {
-      running: false,
-      waitingForPopup: false,
-      stepIndex: 0,
-      steps: [],
-      lastMessage: "대기",
-      error: ""
+  loadDataPromise = (async () => {
+    const response = await sendRuntimeMessage({
+      type: "GET_DATA"
+    });
+
+    if (!response?.ok) {
+      throw new Error(response?.message || "데이터를 불러오지 못했습니다.");
     }
-  };
 
-  if (typeof editingStepIndex === "number" && editingStepIndex >= currentData.steps.length) {
-    editingStepIndex = null;
-  }
+    currentData = {
+      steps: Array.isArray(response.steps) ? response.steps : [],
+      recording: response.recording || {
+        enabled: false,
+        rootTabId: null,
+        trackedTabIds: []
+      },
+      run: response.run || {
+        running: false,
+        waitingForPopup: false,
+        stepIndex: 0,
+        steps: [],
+        lastMessage: "대기",
+        error: ""
+      }
+    };
 
-  renderStatus();
-  renderSteps();
+    if (typeof editingStepIndex === "number" && editingStepIndex >= currentData.steps.length) {
+      editingStepIndex = null;
+    }
 
-  if (currentData.run?.lastMessage) {
-    setResult(currentData.run.lastMessage);
+    renderStatus();
+    renderSteps();
+
+    if (currentData.run?.lastMessage) {
+      setResult(currentData.run.lastMessage);
+    }
+  })();
+
+  try {
+    await loadDataPromise;
+  } finally {
+    loadDataPromise = null;
   }
 }
 

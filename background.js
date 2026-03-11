@@ -317,6 +317,36 @@ async function sendTabMessage(tabId, message) {
   return await chrome.tabs.sendMessage(tabId, message);
 }
 
+function isRetryableTabMessageError(error) {
+  const message = String(error?.message || error || "");
+  return (
+    message.includes("message channel closed before a response was received") ||
+    message.includes("Could not establish connection") ||
+    message.includes("Receiving end does not exist")
+  );
+}
+
+async function sendTabMessageWithReconnect(tabId, message, retries = 4) {
+  let lastError = null;
+
+  for (let i = 0; i < retries; i += 1) {
+    try {
+      return await sendTabMessage(tabId, message);
+    } catch (error) {
+      lastError = error;
+
+      if (!isRetryableTabMessageError(error) || i === retries - 1) {
+        throw error;
+      }
+
+      await delay(150);
+      await ensureContentReady(tabId);
+    }
+  }
+
+  throw lastError || new Error("탭 메시지 전송 실패");
+}
+
 async function ensureContentReady(tabId, retries = 4) {
   for (let i = 0; i < retries; i += 1) {
     try {
@@ -342,7 +372,7 @@ async function ensureContentReady(tabId, retries = 4) {
 async function startRecordingOnTab(tabId) {
   await ensureContentReady(tabId);
 
-  const response = await sendTabMessage(tabId, {
+  const response = await sendTabMessageWithReconnect(tabId, {
     type: "START_RECORD"
   });
 

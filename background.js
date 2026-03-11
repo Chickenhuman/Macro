@@ -495,24 +495,25 @@ function getRecordingAttachDecision(tab, recording) {
   };
 }
 
-function isPopupCandidateTab(tab, runState, step) {
-  if (!tab || !isFiniteTabId(tab.id)) return false;
-  if (isRestrictedUrl(tab.url || "")) return false;
-  if (tab.id === runState.currentTabId) return false;
+function scorePopupCandidate(tab, runState, step) {
+  if (!tab || !isFiniteTabId(tab.id)) return -1;
+  if (isRestrictedUrl(tab.url || "")) return -1;
+  if (tab.id === runState.currentTabId) return -1;
 
   const expected = String(step.urlIncludes || "").trim();
   if (expected && !(tab.url || "").includes(expected)) {
-    return false;
+    return -1;
   }
 
-  const openerCandidates = [runState.currentTabId, runState.rootTabId].filter(isFiniteTabId);
+  let score = 0;
 
+  const openerCandidates = [runState.currentTabId, runState.rootTabId].filter(isFiniteTabId);
   if (openerCandidates.includes(tab.openerTabId)) {
-    return true;
+    score += 100;
   }
 
   if ((runState.pendingPopupTabIds || []).includes(tab.id)) {
-    return true;
+    score += 90;
   }
 
   const sameOriginOtherWindow =
@@ -521,13 +522,33 @@ function isPopupCandidateTab(tab, runState, step) {
     isSameOriginOrHostname(tab.url || "", runState.rootOrigin, runState.rootHostname);
 
   if (sameOriginOtherWindow) {
-    const knownTabIds = new Set(runState.knownTabIdsAtWaitStart || []);
-    if (!knownTabIds.has(tab.id)) {
-      return true;
+    score += 70;
+  }
+
+  if (tab.active) {
+    score += 20;
+  }
+
+  if (typeof tab.lastAccessed === "number") {
+    score += Math.min(10, Math.floor(tab.lastAccessed / 100000000000));
+  }
+
+  return score;
+}
+
+function findBestPopupCandidate(tabs, runState, step) {
+  let bestTab = null;
+  let bestScore = -1;
+
+  for (const tab of tabs || []) {
+    const score = scorePopupCandidate(tab, runState, step);
+    if (score > bestScore) {
+      bestScore = score;
+      bestTab = tab;
     }
   }
 
-  return false;
+  return bestScore >= 0 ? bestTab : null;
 }
 
 async function switchRunToTab(runState, tabId, message) {
@@ -550,7 +571,7 @@ async function switchRunToTab(runState, tabId, message) {
 
 async function handleWaitForPopupStep(runState, step) {
   const tabs = await chrome.tabs.query({});
-  const found = tabs.find((tab) => isPopupCandidateTab(tab, runState, step));
+  const found = findBestPopupCandidate(tabs, runState, step);
 
   if (found) {
     const nextState = await switchRunToTab(
@@ -675,7 +696,6 @@ async function handleRecordingRelatedTab(tabId, tab) {
         popupStepRecordedTabIds: [...popupStepRecorded]
       });
     }
-    // onUpdated 재호출이 오지 않으면 이 탭은 붙지 않을 수 있음
   }
 }
 
@@ -683,12 +703,12 @@ async function handleRunRelatedTab(tabId, tab) {
   const runState = await getRunState();
   if (!runState.running || !runState.waitingForPopup) return;
 
-  const pendingMatched = (runState.pendingPopupTabIds || []).includes(tabId);
-  const normalMatched = isPopupCandidateTab(tab, runState, {
+  const step = {
     urlIncludes: runState.popupUrlIncludes
-  });
+  };
 
-  if (!pendingMatched && !normalMatched) return;
+  const score = scorePopupCandidate(tab, runState, step);
+  if (score < 0) return;
 
   const waitMs = Date.now() - (runState.popupWaitStartedAt || 0);
   if (runState.popupTimeout > 0 && waitMs > runState.popupTimeout) {
@@ -742,7 +762,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
   }
 
   const runState = await getRunState();
-  if (runState.running && runState.waitingForPopup) {
+  if (runState.running) {
     const openerCandidates = [runState.currentTabId, runState.rootTabId].filter(isFiniteTabId);
     if (isFiniteTabId(tab.openerTabId) && openerCandidates.includes(tab.openerTabId)) {
       await setRunState({

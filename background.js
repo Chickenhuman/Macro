@@ -758,6 +758,21 @@ async function handleRecordingRelatedTab(tabId, tab) {
   }
 }
 
+async function reviveRecordingOnTrackedTab(tabId, tab) {
+  const recording = await getRecordingState();
+  if (!recording.enabled) return;
+
+  const tracked = new Set(recording.trackedTabIds || []);
+  if (!tracked.has(tabId)) return;
+  if (isRestrictedUrl(tab?.url || "")) return;
+
+  try {
+    await startRecordingOnTab(tabId);
+  } catch {
+    // 다음 onUpdated complete에서 다시 시도
+  }
+}
+
 async function handleRunRelatedTab(tabId, tab) {
   const runState = await getRunState();
   if (!runState.running || !runState.waitingForPopup) return;
@@ -835,6 +850,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete") return;
 
+  await reviveRecordingOnTrackedTab(tabId, tab);
   await handleRecordingRelatedTab(tabId, tab);
   await handleRunRelatedTab(tabId, tab);
 });

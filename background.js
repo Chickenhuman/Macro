@@ -23,6 +23,7 @@ const DEFAULT_RUN_STATE = {
   rootOrigin: "",
   rootHostname: "",
   currentTabId: null,
+  currentTabTrail: [],
   steps: [],
   stepIndex: 0,
   waitingForPopup: false,
@@ -191,6 +192,7 @@ async function setRunState(state) {
   };
 
   nextState.steps = Array.isArray(nextState.steps) ? nextState.steps : [];
+  nextState.currentTabTrail = uniqTabIds(nextState.currentTabTrail);
   nextState.pendingPopupTabIds = uniqTabIds(nextState.pendingPopupTabIds);
   nextState.knownTabIdsAtWaitStart = uniqTabIds(nextState.knownTabIdsAtWaitStart);
 
@@ -200,6 +202,7 @@ async function setRunState(state) {
     nextState.rootOrigin = "";
     nextState.rootHostname = "";
     nextState.currentTabId = null;
+    nextState.currentTabTrail = [];
     nextState.steps = [];
     nextState.stepIndex = 0;
     nextState.waitingForPopup = false;
@@ -554,9 +557,15 @@ function findBestPopupCandidate(tabs, runState, step) {
 async function switchRunToTab(runState, tabId, message) {
   await ensureContentReady(tabId);
 
+  const nextTrail = [...(runState.currentTabTrail || [])];
+  if (isFiniteTabId(runState.currentTabId) && runState.currentTabId !== tabId) {
+    nextTrail.push(runState.currentTabId);
+  }
+
   return await setRunState({
     ...runState,
     currentTabId: tabId,
+    currentTabTrail: nextTrail,
     stepIndex: runState.stepIndex + 1,
     waitingForPopup: false,
     popupUrlIncludes: "",
@@ -567,6 +576,56 @@ async function switchRunToTab(runState, tabId, message) {
     pendingPopupTabIds: (runState.pendingPopupTabIds || []).filter((id) => id !== tabId),
     knownTabIdsAtWaitStart: []
   });
+}
+
+async function restoreRunToPreviousTab(runState, closedTabId) {
+  const trail = [...(runState.currentTabTrail || [])].filter((id) => id !== closedTabId);
+
+  while (trail.length) {
+    const fallbackTabId = trail.pop();
+    if (!isFiniteTabId(fallbackTabId)) continue;
+
+    try {
+      const fallbackTab = await chrome.tabs.get(fallbackTabId);
+      if (isRestrictedUrl(fallbackTab.url || "")) {
+        continue;
+      }
+
+      await ensureContentReady(fallbackTabId);
+
+      return await setRunState({
+        ...runState,
+        currentTabId: fallbackTabId,
+        currentTabTrail: trail,
+        lastMessage: `팝업이 닫혀 이전 탭으로 복귀: ${fallbackTab.url || fallbackTab.title || fallbackTabId}`,
+        error: ""
+      });
+    } catch {
+      // 다음 후보를 확인
+    }
+  }
+
+  if (isFiniteTabId(runState.rootTabId) && runState.rootTabId !== closedTabId) {
+    try {
+      const rootTab = await chrome.tabs.get(runState.rootTabId);
+      if (!isRestrictedUrl(rootTab.url || "")) {
+        await ensureContentReady(runState.rootTabId);
+
+        return await setRunState({
+          ...runState,
+          currentTabId: runState.rootTabId,
+          currentTabTrail: [],
+          lastMessage: `팝업이 닫혀 루트 탭으로 복귀: ${rootTab.url || rootTab.title || runState.rootTabId}`,
+          error: ""
+        });
+      }
+    } catch {
+      // 실패 시 아래에서 중단
+    }
+  }
+
+  await failRun("팝업이 닫힌 뒤 복귀할 실행 탭을 찾지 못했습니다.");
+  return null;
 }
 
 async function handleWaitForPopupStep(runState, step) {
@@ -806,20 +865,39 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 
   const nextPending = (runState.pendingPopupTabIds || []).filter((id) => id !== tabId);
   const nextKnown = (runState.knownTabIdsAtWaitStart || []).filter((id) => id !== tabId);
+  const nextTrail = (runState.currentTabTrail || []).filter((id) => id !== tabId);
 
-  if (runState.currentTabId === tabId || runState.rootTabId === tabId) {
-    await failRun("실행 중인 탭이 닫혀서 매크로를 중단했습니다.");
+  if (runState.rootTabId === tabId) {
+    await failRun("실행 기준 탭이 닫혀서 매크로를 중단했습니다.");
+    return;
+  }
+
+  if (runState.currentTabId === tabId) {
+    const restoredState = await restoreRunToPreviousTab(
+      {
+        ...runState,
+        pendingPopupTabIds: nextPending,
+        knownTabIdsAtWaitStart: nextKnown,
+        currentTabTrail: nextTrail
+      },
+      tabId
+    );
+    if (restoredState?.running) {
+      await continueMacroRun(restoredState);
+    }
     return;
   }
 
   if (
     nextPending.length !== (runState.pendingPopupTabIds || []).length ||
-    nextKnown.length !== (runState.knownTabIdsAtWaitStart || []).length
+    nextKnown.length !== (runState.knownTabIdsAtWaitStart || []).length ||
+    nextTrail.length !== (runState.currentTabTrail || []).length
   ) {
     await setRunState({
       ...runState,
       pendingPopupTabIds: nextPending,
-      knownTabIdsAtWaitStart: nextKnown
+      knownTabIdsAtWaitStart: nextKnown,
+      currentTabTrail: nextTrail
     });
   }
 });
@@ -939,6 +1017,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             rootOrigin: getUrlOrigin(tab.url || ""),
             rootHostname: getUrlHostname(tab.url || ""),
             currentTabId: tabId,
+            currentTabTrail: [],
             steps: sanitized,
             stepIndex: 0,
             waitingForPopup: false,

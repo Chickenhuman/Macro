@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const BACKGROUND_PATH = path.join(__dirname, "..", "background.js");
+const BACKGROUND_PATH = path.join(__dirname, "..", "..", "background.js");
 const BACKGROUND_SOURCE = fs.readFileSync(BACKGROUND_PATH, "utf8");
 
 function normalize(value) {

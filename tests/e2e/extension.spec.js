@@ -5,7 +5,7 @@ const fs = require("node:fs/promises");
 
 const { test, expect, chromium } = require("@playwright/test");
 
-const EXTENSION_PATH = path.join(__dirname, "..");
+const EXTENSION_PATH = path.join(__dirname, "..", "..");
 
 function renderPage(title, body, script = "") {
   return `<!DOCTYPE html>

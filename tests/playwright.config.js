@@ -10,4 +10,3 @@ module.exports = defineConfig({
   workers: 1,
   reporter: "line"
 });
-

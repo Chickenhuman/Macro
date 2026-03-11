@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const CONTENT_PATH = path.join(__dirname, "..", "content.js");
+const CONTENT_PATH = path.join(__dirname, "..", "..", "content.js");
 const CONTENT_SOURCE = fs.readFileSync(CONTENT_PATH, "utf8");
 
 function normalize(value) {

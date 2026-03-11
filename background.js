@@ -1,6 +1,7 @@
 const STEPS_KEY = "macroSteps";
 const RECORDING_KEY = "macroRecordingState";
 const RUN_KEY = "macroRunState";
+const ERROR_LOGS_KEY = "macroErrorLogs";
 const POPUP_WAIT_ALARM = "macroPopupWaitTimeout";
 
 const DEFAULT_RECORDING_STATE = {
@@ -185,6 +186,35 @@ async function getRunState() {
     ...DEFAULT_RUN_STATE,
     ...(data[RUN_KEY] || {})
   };
+}
+
+async function getErrorLogs() {
+  const data = await chrome.storage.local.get(ERROR_LOGS_KEY);
+  return Array.isArray(data[ERROR_LOGS_KEY]) ? data[ERROR_LOGS_KEY] : [];
+}
+
+async function setErrorLogs(entries) {
+  await chrome.storage.local.set({
+    [ERROR_LOGS_KEY]: Array.isArray(entries) ? entries.slice(-100) : []
+  });
+}
+
+async function appendErrorLog(message, source = "runtime") {
+  const text = String(message || "").trim();
+  if (!text) return [];
+
+  const current = await getErrorLogs();
+  const next = [
+    ...current,
+    {
+      at: Date.now(),
+      source: String(source || "runtime"),
+      message: text
+    }
+  ].slice(-100);
+
+  await setErrorLogs(next);
+  return next;
 }
 
 async function setRunState(state) {
@@ -403,6 +433,7 @@ async function clearPopupWaitAlarm() {
 
 async function failRun(message) {
   await clearPopupWaitAlarm();
+  await appendErrorLog(message || "실행 실패", "run");
   await setRunState({
     running: false,
     lastMessage: `오류: ${message}`,
@@ -844,7 +875,12 @@ async function handleRunRelatedTab(tabId, tab) {
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const data = await chrome.storage.local.get([STEPS_KEY, RECORDING_KEY, RUN_KEY]);
+  const data = await chrome.storage.local.get([
+    STEPS_KEY,
+    RECORDING_KEY,
+    RUN_KEY,
+    ERROR_LOGS_KEY
+  ]);
 
   if (!Array.isArray(data[STEPS_KEY])) {
     await setSteps([]);
@@ -856,6 +892,10 @@ chrome.runtime.onInstalled.addListener(async () => {
 
   if (!data[RUN_KEY]) {
     await setRunState(DEFAULT_RUN_STATE);
+  }
+
+  if (!Array.isArray(data[ERROR_LOGS_KEY])) {
+    await setErrorLogs([]);
   }
 
   await updateBadge();
@@ -972,17 +1012,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       switch (message?.type) {
         case "GET_DATA": {
-          const [steps, recording, runState] = await Promise.all([
+          const [steps, recording, runState, errorLogs] = await Promise.all([
             getSteps(),
             getRecordingState(),
-            getRunState()
+            getRunState(),
+            getErrorLogs()
           ]);
 
           sendResponse({
             ok: true,
             steps,
             recording,
-            run: runState
+            run: runState,
+            errorLogs
           });
           return;
         }
@@ -1144,6 +1186,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
+        case "APPEND_ERROR_LOG": {
+          const messageText = String(message.message || "").trim();
+          if (!messageText) {
+            throw new Error("저장할 오류 로그가 없습니다.");
+          }
+
+          const errorLogs = await appendErrorLog(messageText, message.source || "popup");
+
+          sendResponse({
+            ok: true,
+            errorLogs
+          });
+          return;
+        }
+
+        case "CLEAR_ERROR_LOGS": {
+          await setErrorLogs([]);
+
+          sendResponse({
+            ok: true,
+            errorLogs: []
+          });
+          return;
+        }
+
         default: {
           sendResponse({
             ok: false,
@@ -1152,6 +1219,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       }
     } catch (error) {
+      if (message?.type !== "GET_DATA" && message?.type !== "APPEND_ERROR_LOG") {
+        try {
+          await appendErrorLog(error?.message || String(error), message?.type || "runtime");
+        } catch {
+          // ignore logging failure
+        }
+      }
+
       sendResponse({
         ok: false,
         message: error?.message || String(error)

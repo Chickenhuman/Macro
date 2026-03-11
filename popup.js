@@ -15,6 +15,11 @@ const jsonEditor = document.getElementById("jsonEditor");
 const applyJsonBtn = document.getElementById("applyJsonBtn");
 const copyJsonBtn = document.getElementById("copyJsonBtn");
 const resultBox = document.getElementById("resultBox");
+const copyErrorLogBtn = document.getElementById("copyErrorLogBtn");
+const clearErrorLogBtn = document.getElementById("clearErrorLogBtn");
+const errorLogBox = document.getElementById("errorLogBox");
+
+const ERROR_LOGS_KEY = "macroErrorLogs";
 
 let currentData = {
   steps: [],
@@ -30,7 +35,8 @@ let currentData = {
     steps: [],
     lastMessage: "대기",
     error: ""
-  }
+  },
+  errorLogs: []
 };
 
 let editingStepIndex = null;
@@ -38,6 +44,111 @@ let loadDataPromise = null;
 
 function setResult(text) {
   resultBox.textContent = text;
+}
+
+function normalizeErrorText(message) {
+  return String(message || "").trim();
+}
+
+function formatErrorTimestamp(value) {
+  if (!value) return "";
+
+  try {
+    return new Date(value).toLocaleString("ko-KR", {
+      hour12: false
+    });
+  } catch {
+    return String(value);
+  }
+}
+
+function buildErrorLogText() {
+  const logs = Array.isArray(currentData.errorLogs) ? currentData.errorLogs : [];
+  if (!logs.length) {
+    return "오류 로그 없음";
+  }
+
+  return [...logs]
+    .reverse()
+    .map((entry, index) => {
+      const time = formatErrorTimestamp(entry?.at);
+      const source = String(entry?.source || "runtime");
+      const message = normalizeErrorText(entry?.message || "");
+      return `${index + 1}. [${time || "-"}] ${source}\n${message || "(메시지 없음)"}`;
+    })
+    .join("\n\n");
+}
+
+function renderErrorLogs() {
+  errorLogBox.textContent = buildErrorLogText();
+}
+
+async function writeErrorLogEntry(message, source = "popup") {
+  const text = normalizeErrorText(message);
+  if (!text) return;
+
+  try {
+    const response = await sendRuntimeMessage({
+      type: "APPEND_ERROR_LOG",
+      source,
+      message: text
+    });
+
+    if (response?.ok && Array.isArray(response.errorLogs)) {
+      currentData.errorLogs = response.errorLogs;
+      renderErrorLogs();
+      return;
+    }
+  } catch {
+    // storage fallback below
+  }
+
+  const data = await chrome.storage.local.get(ERROR_LOGS_KEY);
+  const current = Array.isArray(data[ERROR_LOGS_KEY]) ? data[ERROR_LOGS_KEY] : [];
+  const next = [
+    ...current,
+    {
+      at: Date.now(),
+      source: String(source || "popup"),
+      message: text
+    }
+  ].slice(-100);
+
+  await chrome.storage.local.set({
+    [ERROR_LOGS_KEY]: next
+  });
+
+  currentData.errorLogs = next;
+  renderErrorLogs();
+}
+
+async function clearErrorLogs() {
+  try {
+    const response = await sendRuntimeMessage({
+      type: "CLEAR_ERROR_LOGS"
+    });
+
+    if (response?.ok) {
+      currentData.errorLogs = [];
+      renderErrorLogs();
+      return;
+    }
+  } catch {
+    // storage fallback below
+  }
+
+  await chrome.storage.local.set({
+    [ERROR_LOGS_KEY]: []
+  });
+
+  currentData.errorLogs = [];
+  renderErrorLogs();
+}
+
+async function handleUiError(error, source = "popup") {
+  const text = normalizeErrorText(error?.message || String(error));
+  setResult(`오류: ${text}`);
+  await writeErrorLogEntry(text, source);
 }
 
 function isRetryableRuntimeMessageError(error) {
@@ -288,7 +399,7 @@ function renderStepEditor(item, step, index, steps) {
     try {
       await saveEditedStep(index, fieldDefs, editor);
     } catch (error) {
-      setResult(`오류: ${error.message || String(error)}`);
+      await handleUiError(error, "popup:editStep");
     }
   });
 
@@ -412,7 +523,8 @@ async function loadData() {
         steps: [],
         lastMessage: "대기",
         error: ""
-      }
+      },
+      errorLogs: Array.isArray(response.errorLogs) ? response.errorLogs : []
     };
 
     if (typeof editingStepIndex === "number" && editingStepIndex >= currentData.steps.length) {
@@ -421,6 +533,7 @@ async function loadData() {
 
     renderStatus();
     renderSteps();
+    renderErrorLogs();
 
     if (currentData.run?.lastMessage) {
       setResult(currentData.run.lastMessage);
@@ -554,7 +667,7 @@ startRecordBtn.addEventListener("click", async () => {
   try {
     await startRecording();
   } catch (error) {
-    setResult(`오류: ${error.message || String(error)}`);
+    await handleUiError(error, "popup:startRecording");
   }
 });
 
@@ -562,7 +675,7 @@ stopRecordBtn.addEventListener("click", async () => {
   try {
     await stopRecording();
   } catch (error) {
-    setResult(`오류: ${error.message || String(error)}`);
+    await handleUiError(error, "popup:stopRecording");
   }
 });
 
@@ -570,7 +683,7 @@ runBtn.addEventListener("click", async () => {
   try {
     await runMacro();
   } catch (error) {
-    setResult(`오류: ${error.message || String(error)}`);
+    await handleUiError(error, "popup:runMacro");
   }
 });
 
@@ -579,7 +692,7 @@ clearBtn.addEventListener("click", async () => {
     await clearSteps();
     setResult("기록 전체 삭제 완료");
   } catch (error) {
-    setResult(`오류: ${error.message || String(error)}`);
+    await handleUiError(error, "popup:clearSteps");
   }
 });
 
@@ -588,7 +701,7 @@ refreshBtn.addEventListener("click", async () => {
     await loadData();
     setResult("새로고침 완료");
   } catch (error) {
-    setResult(`오류: ${error.message || String(error)}`);
+    await handleUiError(error, "popup:refresh");
   }
 });
 
@@ -598,7 +711,7 @@ document.querySelectorAll("button[data-wait]").forEach((button) => {
       const ms = Number(button.getAttribute("data-wait"));
       await addWait(ms);
     } catch (error) {
-      setResult(`오류: ${error.message || String(error)}`);
+      await handleUiError(error, "popup:addWait");
     }
   });
 });
@@ -607,7 +720,7 @@ addWaitForTemplateBtn.addEventListener("click", async () => {
   try {
     await addWaitForTemplate();
   } catch (error) {
-    setResult(`오류: ${error.message || String(error)}`);
+    await handleUiError(error, "popup:addWaitForTemplate");
   }
 });
 
@@ -615,7 +728,7 @@ addWaitForPopupTemplateBtn.addEventListener("click", async () => {
   try {
     await addWaitForPopupTemplate();
   } catch (error) {
-    setResult(`오류: ${error.message || String(error)}`);
+    await handleUiError(error, "popup:addWaitForPopupTemplate");
   }
 });
 
@@ -624,7 +737,7 @@ applyJsonBtn.addEventListener("click", async () => {
     editingStepIndex = null;
     await applyJson();
   } catch (error) {
-    setResult(`오류: ${error.message || String(error)}`);
+    await handleUiError(error, "popup:applyJson");
   }
 });
 
@@ -632,12 +745,32 @@ copyJsonBtn.addEventListener("click", async () => {
   try {
     await copyJson();
   } catch (error) {
-    setResult(`오류: ${error.message || String(error)}`);
+    await handleUiError(error, "popup:copyJson");
+  }
+});
+
+copyErrorLogBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(buildErrorLogText());
+    setResult("오류 로그 복사 완료");
+  } catch (error) {
+    await handleUiError(error, "popup:copyErrorLog");
+  }
+});
+
+clearErrorLogBtn.addEventListener("click", async () => {
+  try {
+    await clearErrorLogs();
+    setResult("오류 로그 삭제 완료");
+  } catch (error) {
+    await handleUiError(error, "popup:clearErrorLogs");
   }
 });
 
 loadData().catch((error) => {
-  setResult(`오류: ${error.message || String(error)}`);
+  handleUiError(error, "popup:initialLoad").catch(() => {
+    setResult(`오류: ${error.message || String(error)}`);
+  });
 });
 
 setInterval(() => {

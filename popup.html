@@ -245,6 +245,32 @@
       max-height: 180px;
       overflow: auto;
     }
+
+    .panel-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .panel-actions button {
+      flex: 1;
+      height: 32px;
+      font-size: 12px;
+    }
+
+    #errorLogBox {
+      margin-top: 8px;
+      padding: 10px;
+      border-radius: 10px;
+      background: #fff8f7;
+      border: 1px solid #f1d2cf;
+      font-size: 12px;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      max-height: 180px;
+      overflow: auto;
+      color: #7a271a;
+    }
   </style>
 </head>
 <body>
@@ -326,6 +352,11 @@
   <div class="panel">
     <div class="section-title">실행 결과</div>
     <div id="resultBox">준비됨</div>
+    <div class="panel-actions">
+      <button id="copyErrorLogBtn">오류 로그 복사</button>
+      <button id="clearErrorLogBtn">오류 로그 삭제</button>
+    </div>
+    <div id="errorLogBox">오류 로그 없음</div>
   </div>
 
   <script src="popup.js"></script>

@@ -1,0 +1,14 @@
+{
+  "name": "macro",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test:unit": "node --test tests/content.test.js tests/background.test.js",
+    "test:e2e": "xvfb-run -a npx playwright test",
+    "test": "npm run test:unit && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}
+

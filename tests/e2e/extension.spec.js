@@ -98,6 +98,178 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/pudd-controls.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "PUDD Controls",
+          `
+            <style>
+              #rowCheckWrap {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 28px;
+                height: 28px;
+                border: 1px solid #666;
+                cursor: pointer;
+                user-select: none;
+              }
+
+              #rowCheckWrap svg {
+                width: 18px;
+                height: 18px;
+                pointer-events: none;
+              }
+
+              #archiveButton {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 120px;
+                height: 36px;
+                padding: 0 16px;
+                border: 1px solid #999;
+                background: #f5f5f5;
+                cursor: pointer;
+                user-select: none;
+              }
+            </style>
+            <div id="rowCheckWrap" class="PUDD-UI-checkbox PUDDCheckBoxWrap">
+              <input id="rowCheckInput" class="PUDDCheckBox" type="checkbox" hidden />
+              <svg id="rowCheckIcon" viewBox="0 0 18 18" aria-hidden="true">
+                <rect x="1" y="1" width="16" height="16" fill="white" stroke="#0b6efd"></rect>
+                <polyline
+                  id="rowCheckMark"
+                  points="4,9 8,13 14,5"
+                  fill="none"
+                  stroke="#0b6efd"
+                  stroke-width="2"
+                  style="display:none"
+                ></polyline>
+              </svg>
+            </div>
+            <div
+              id="archiveButton"
+              class="PUDD-UI-btn"
+              role="button"
+              tabindex="0"
+            >
+              <span id="archiveButtonLabel">편철접수</span>
+            </div>
+            <div id="buttonResult"></div>
+          `,
+          `
+            const input = document.querySelector("#rowCheckInput");
+            const mark = document.querySelector("#rowCheckMark");
+            const wrapper = document.querySelector("#rowCheckWrap");
+            const button = document.querySelector("#archiveButton");
+
+            function renderCheck() {
+              mark.style.display = input.checked ? "block" : "none";
+            }
+
+            wrapper.addEventListener("click", () => {
+              input.checked = !input.checked;
+              renderCheck();
+            });
+
+            button.addEventListener("click", () => {
+              document.querySelector("#buttonResult").textContent = "clicked";
+            });
+
+            renderCheck();
+          `
+        )
+      );
+      return;
+    }
+
+    if (route === "/pudd-dropdown.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "PUDD Dropdown",
+          `
+            <style>
+              #docTypeWrap {
+                display: inline-flex;
+                align-items: center;
+                justify-content: space-between;
+                width: 180px;
+                height: 36px;
+                padding: 0 12px;
+                border: 1px solid #999;
+                cursor: pointer;
+                user-select: none;
+              }
+
+              #docTypeOptions {
+                display: none;
+                list-style: none;
+                padding: 0;
+                margin: 8px 0 0;
+                width: 180px;
+                border: 1px solid #999;
+              }
+
+              #docTypeOptions.open {
+                display: block;
+              }
+
+              #docTypeOptions li {
+                padding: 8px 12px;
+                cursor: pointer;
+              }
+
+              #docTypeOptions li:hover {
+                background: #eef4ff;
+              }
+            </style>
+            <div
+              class="PUDD-UI-selectBox"
+            >
+              <input
+                id="docTypeInput"
+                class="PUDD-UI-input"
+                type="text"
+                readonly
+                role="combobox"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                value="기본"
+              />
+              <span aria-hidden="true">▼</span>
+            </div>
+            <ul id="docTypeOptions" role="listbox">
+              <li role="option">일반접수</li>
+              <li role="option">편철접수</li>
+            </ul>
+          `,
+          `
+            const input = document.querySelector("#docTypeInput");
+            const options = document.querySelector("#docTypeOptions");
+
+            input.addEventListener("click", () => {
+              const nextOpen = !options.classList.contains("open");
+              options.classList.toggle("open", nextOpen);
+              input.setAttribute("aria-expanded", String(nextOpen));
+            });
+
+            options.querySelectorAll("[role='option']").forEach((option) => {
+              option.addEventListener("click", (event) => {
+                event.stopPropagation();
+                input.value = option.textContent;
+                options.classList.remove("open");
+                input.setAttribute("aria-expanded", "false");
+              });
+            });
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/run-child.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -381,5 +553,96 @@ test.describe("extension smoke tests", () => {
         error: "",
         lastMessage: "실행 완료"
       });
+  });
+
+  test("records and runs PUDD-style checkbox and button clicks", async () => {
+    const recordPage = await bundle.context.newPage();
+    await recordPage.goto(`${server.baseUrl}/pudd-controls.html`);
+
+    const recordTabId = await findTabId(extensionPage, recordPage.url());
+    expect(recordTabId).toBeTruthy();
+
+    const startResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_RECORDING",
+      tabId: recordTabId
+    });
+    expect(startResponse.ok).toBe(true);
+
+    await recordPage.click("#rowCheckWrap");
+    await recordPage.click("#archiveButtonLabel");
+
+    const stopResponse = await sendRuntimeMessage(extensionPage, {
+      type: "STOP_RECORDING"
+    });
+    expect(stopResponse.ok).toBe(true);
+
+    const recordedStorage = await readStorage(extensionPage);
+    const recordedSteps = recordedStorage.macroSteps || [];
+
+    expect(recordedSteps.some((step) => step.type === "click" && step.selector === "#rowCheckWrap")).toBe(true);
+    expect(recordedSteps.some((step) => step.type === "click" && step.selector === "#archiveButton")).toBe(true);
+    expect(recordedSteps.some((step) => step.type === "dropdownSelect")).toBe(false);
+
+    await recordPage.close();
+
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/pudd-controls.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps: recordedSteps.filter((step) => step.type === "click")
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return await runPage.evaluate(() => ({
+          checked: document.querySelector("#rowCheckInput").checked,
+          result: document.querySelector("#buttonResult").textContent
+        }));
+      })
+      .toMatchObject({
+        checked: true,
+        result: "clicked"
+      });
+  });
+
+  test("records PUDD-style dropdown selection as dropdownSelect", async () => {
+    const page = await bundle.context.newPage();
+    await page.goto(`${server.baseUrl}/pudd-dropdown.html`);
+
+    const tabId = await findTabId(extensionPage, page.url());
+    expect(tabId).toBeTruthy();
+
+    const startResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_RECORDING",
+      tabId
+    });
+    expect(startResponse.ok).toBe(true);
+
+    await page.click("#docTypeInput");
+    await page.getByRole("option", { name: "편철접수" }).click();
+
+    const stopResponse = await sendRuntimeMessage(extensionPage, {
+      type: "STOP_RECORDING"
+    });
+    expect(stopResponse.ok).toBe(true);
+
+    const storage = await readStorage(extensionPage);
+    const steps = storage.macroSteps || [];
+
+    expect(
+      steps.some(
+        (step) =>
+          step.type === "dropdownSelect" &&
+          step.selector === "#docTypeInput" &&
+          step.value === "편철접수"
+      )
+    ).toBe(true);
+    expect(steps.some((step) => step.type === "click" && step.selector === "#docTypeInput")).toBe(false);
   });
 });

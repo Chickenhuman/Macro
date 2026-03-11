@@ -118,7 +118,10 @@
     const className = typeof el?.className === "string" ? el.className.toLowerCase() : "";
     if (!className) return false;
 
-    return /(dropdown|combo|combobox|selectbox|select2|chosen|pudd)/.test(className);
+    return (
+      /(dropdown|combo|combobox|selectbox|select2|chosen)/.test(className) ||
+      /pudd[^\s]*(dropdown|combo|combobox|select)/.test(className)
+    );
   }
 
   function isDropdownLikeElement(el) {
@@ -172,15 +175,17 @@
       beforeValue: getElementDisplayValue(trigger),
       startedAt: Date.now()
     };
+
+    monitorPendingDropdownRecord(pendingDropdownRecord.startedAt).catch(() => {
+      // dropdown value tracking is best-effort during recording
+    });
     return true;
   }
 
-  async function finalizePendingDropdownRecord() {
+  async function tryRecordPendingDropdownChange() {
     if (!recordMode || !pendingDropdownRecord) {
       return false;
     }
-
-    await delay(180);
 
     const elapsed = Date.now() - pendingDropdownRecord.startedAt;
     if (elapsed > 5000) {
@@ -215,6 +220,24 @@
 
     pendingDropdownRecord = null;
     return true;
+  }
+
+  async function monitorPendingDropdownRecord(startedAt) {
+    while (recordMode && pendingDropdownRecord?.startedAt === startedAt) {
+      const recorded = await tryRecordPendingDropdownChange();
+      if (recorded) {
+        return true;
+      }
+
+      await delay(120);
+    }
+
+    return false;
+  }
+
+  async function finalizePendingDropdownRecord() {
+    await delay(180);
+    return await tryRecordPendingDropdownChange();
   }
 
   function buildNthPathSelector(el) {
@@ -516,6 +539,30 @@
     return directParent || checkboxInput;
   }
 
+  function hasButtonLikeClassName(el) {
+    const className = typeof el?.className === "string" ? el.className.toLowerCase() : "";
+    if (!className) return false;
+
+    return className
+      .split(/\s+/)
+      .filter(Boolean)
+      .some((token) => /(^|[-_])(btn|button)([-_]|$)/.test(token));
+  }
+
+  function isButtonLikeElement(el) {
+    if (!(el instanceof Element)) return false;
+
+    if (
+      el.matches(
+        "button, [role='button'], a, input[type='button'], input[type='submit'], input[type='reset'], [onclick]"
+      )
+    ) {
+      return true;
+    }
+
+    return hasButtonLikeClassName(el);
+  }
+
   function getClickableTarget(rawTarget) {
     if (!(rawTarget instanceof Element)) return null;
 
@@ -524,19 +571,15 @@
       return checkboxWrapper;
     }
 
-    return rawTarget.closest(
-      [
-        "button",
-        "[role='button']",
-        "a",
-        "input[type='button']",
-        "input[type='submit']",
-        "input[type='reset']",
-        "[onclick]",
-        ".btn",
-        ".button"
-      ].join(",")
-    );
+    let node = rawTarget;
+    while (node && node !== document.documentElement) {
+      if (isButtonLikeElement(node)) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+
+    return null;
   }
 
   function getInputTarget(rawTarget) {
@@ -563,6 +606,19 @@
     "click",
     async (event) => {
       if (!recordMode) return;
+
+      const checkboxWrapper = findCheckboxLikeWrapper(event.target);
+      if (checkboxWrapper) {
+        const selector = buildSelector(checkboxWrapper);
+        if (!selector) return;
+
+        await recordAction({
+          type: "click",
+          selector,
+          label: getHumanLabel(checkboxWrapper)
+        });
+        return;
+      }
 
       const dropdownTrigger = getDropdownTriggerTarget(event.target);
       if (dropdownTrigger) {
@@ -695,7 +751,13 @@
     el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true }));
     el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
     el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
-    el.click();
+
+    if (typeof el.click === "function") {
+      el.click();
+      return;
+    }
+
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   }
 
   function isCheckboxLikeElement(el) {
@@ -1037,6 +1099,9 @@
         }
 
         if (message?.type === "STOP_RECORD") {
+          if (pendingDropdownRecord) {
+            await finalizePendingDropdownRecord();
+          }
           recordMode = false;
           lastRecordedAt = null;
           pendingDropdownRecord = null;

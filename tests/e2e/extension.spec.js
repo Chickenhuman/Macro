@@ -134,28 +134,65 @@ async function startFixtureServer() {
                 cursor: pointer;
                 user-select: none;
               }
+
+              .iframe_wrap {
+                padding: 16px;
+                border: 1px solid #d7dce5;
+              }
+
+              .toolbar {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+              }
+
+              .field_row {
+                margin-top: 18px;
+              }
+
+              #boardTypeInput {
+                width: 180px;
+                height: 32px;
+                padding: 0 10px;
+                border: 1px solid #999;
+              }
             </style>
-            <div id="rowCheckWrap" class="PUDD-UI-checkbox PUDDCheckBoxWrap">
-              <input id="rowCheckInput" class="PUDDCheckBox" type="checkbox" hidden />
-              <svg id="rowCheckIcon" viewBox="0 0 18 18" aria-hidden="true">
-                <rect x="1" y="1" width="16" height="16" fill="white" stroke="#0b6efd"></rect>
-                <polyline
-                  id="rowCheckMark"
-                  points="4,9 8,13 14,5"
-                  fill="none"
-                  stroke="#0b6efd"
-                  stroke-width="2"
-                  style="display:none"
-                ></polyline>
-              </svg>
-            </div>
-            <div
-              id="archiveButton"
-              class="PUDD-UI-btn"
-              role="button"
-              tabindex="0"
-            >
-              <span id="archiveButtonLabel">편철접수</span>
+            <div class="iframe_wrap">
+              <div class="toolbar">
+                <div id="rowCheckWrap" class="PUDD-UI-checkbox PUDDCheckBoxWrap">
+                  <input id="rowCheckInput" class="PUDDCheckBox" type="checkbox" hidden />
+                  <svg id="rowCheckIcon" viewBox="0 0 18 18" aria-hidden="true">
+                    <rect x="1" y="1" width="16" height="16" fill="white" stroke="#0b6efd"></rect>
+                    <polyline
+                      id="rowCheckMark"
+                      points="4,9 8,13 14,5"
+                      fill="none"
+                      stroke="#0b6efd"
+                      stroke-width="2"
+                      style="display:none"
+                    ></polyline>
+                  </svg>
+                </div>
+                <button
+                  id="archiveButton"
+                  class="puddSetup"
+                  type="button"
+                >
+                  <span id="archiveButtonLabel">편철접수</span>
+                </button>
+              </div>
+              <div class="field_row">
+                <label for="boardTypeInput">접수유형</label>
+                <div class="PUDD-UI-selectBox">
+                  <input
+                    id="boardTypeInput"
+                    class="PUDD-UI-input"
+                    type="text"
+                    readonly
+                    value="관내접수"
+                  />
+                </div>
+              </div>
             </div>
             <div id="buttonResult"></div>
           `,
@@ -179,6 +216,100 @@ async function startFixtureServer() {
             });
 
             renderCheck();
+          `
+        )
+      );
+      return;
+    }
+
+    if (route === "/pudd-picker.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "PUDD Picker",
+          `
+            <style>
+              #archiveCell {
+                padding: 16px;
+              }
+
+              .archive_field {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                padding: 8px 10px;
+                border: 1px solid #c9cfda;
+              }
+
+              #archivePickerInput {
+                width: 180px;
+                height: 32px;
+                padding: 0 10px;
+                border: 1px solid #999;
+              }
+
+              #archivePickerOptions {
+                display: none;
+                list-style: none;
+                margin: 8px 0 0;
+                padding: 0;
+                width: 220px;
+                border: 1px solid #999;
+                background: #fff;
+              }
+
+              #archivePickerOptions.open {
+                display: block;
+              }
+
+              #archivePickerOptions li {
+                padding: 8px 12px;
+                cursor: pointer;
+              }
+
+              #archivePickerOptions li:hover {
+                background: #eef4ff;
+              }
+            </style>
+            <table>
+              <tbody>
+                <tr>
+                  <td id="archiveCell">
+                    <div class="archive_field">
+                      <input
+                        id="archivePickerInput"
+                        type="text"
+                        readonly
+                        value="선택 보존기간 : -"
+                      />
+                      <div class="controll_btn">
+                        <button id="archivePickerButton" type="button">선택</button>
+                      </div>
+                    </div>
+                    <ul id="archivePickerOptions" role="listbox">
+                      <li role="option">3년</li>
+                      <li role="option">10년</li>
+                    </ul>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          `,
+          `
+            const input = document.querySelector("#archivePickerInput");
+            const button = document.querySelector("#archivePickerButton");
+            const options = document.querySelector("#archivePickerOptions");
+
+            button.addEventListener("click", () => {
+              options.classList.toggle("open");
+            });
+
+            options.querySelectorAll("[role='option']").forEach((option) => {
+              option.addEventListener("click", (event) => {
+                input.value = "선택 보존기간 : " + event.currentTarget.textContent.trim();
+                options.classList.remove("open");
+              });
+            });
           `
         )
       );
@@ -644,5 +775,71 @@ test.describe("extension smoke tests", () => {
       )
     ).toBe(true);
     expect(steps.some((step) => step.type === "click" && step.selector === "#docTypeInput")).toBe(false);
+  });
+
+  test("records button-triggered picker changes as dropdownSelect", async () => {
+    const recordPage = await bundle.context.newPage();
+    await recordPage.goto(`${server.baseUrl}/pudd-picker.html`);
+
+    const recordTabId = await findTabId(extensionPage, recordPage.url());
+    expect(recordTabId).toBeTruthy();
+
+    const startResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_RECORDING",
+      tabId: recordTabId
+    });
+    expect(startResponse.ok).toBe(true);
+
+    await recordPage.click("#archivePickerButton");
+    await recordPage.getByRole("option", { name: "10년" }).click();
+
+    const stopResponse = await sendRuntimeMessage(extensionPage, {
+      type: "STOP_RECORDING"
+    });
+    expect(stopResponse.ok).toBe(true);
+
+    const recordedStorage = await readStorage(extensionPage);
+    const recordedSteps = recordedStorage.macroSteps || [];
+
+    expect(
+      recordedSteps.some(
+        (step) =>
+          step.type === "dropdownSelect" &&
+          step.selector === "#archivePickerInput" &&
+          step.value === "선택 보존기간 : 10년"
+      )
+    ).toBe(true);
+    expect(recordedSteps.some((step) => step.type === "click" && step.selector === "#archivePickerButton")).toBe(
+      false
+    );
+
+    await recordPage.close();
+
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/pudd-picker.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const dropdownStep = recordedSteps.find(
+      (step) =>
+        step.type === "dropdownSelect" &&
+        step.selector === "#archivePickerInput" &&
+        step.value === "선택 보존기간 : 10년"
+    );
+    expect(dropdownStep).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps: [dropdownStep]
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return await runPage.inputValue("#archivePickerInput");
+      })
+      .toBe("선택 보존기간 : 10년");
   });
 });

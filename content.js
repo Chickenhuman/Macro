@@ -115,6 +115,17 @@
     return normalizeText(el.innerText || el.textContent || "");
   }
 
+  const DROPDOWN_TRIGGER_SELECTOR = [
+    "[role='combobox']",
+    "[aria-haspopup='listbox']",
+    "[aria-haspopup='tree']",
+    "[data-role='combobox']",
+    "[data-role='dropdown']",
+    "input[readonly]",
+    "input[aria-haspopup]",
+    "input[role='combobox']"
+  ].join(", ");
+
   function summarizeElement(el) {
     if (!(el instanceof Element)) return null;
 
@@ -216,38 +227,162 @@
     if (!(el instanceof Element)) return false;
     if (el.tagName === "SELECT") return false;
 
+    return el.matches(DROPDOWN_TRIGGER_SELECTOR) || hasDropdownLikeClassName(el);
+  }
+
+  function isBroadDropdownContainer(el) {
+    if (!(el instanceof Element)) return true;
+    if (el === document.body || el === document.documentElement) return true;
+    if (el.matches("body, html, form, table, tbody, thead, tfoot, ul, ol")) return true;
+    if ((el.childElementCount || 0) > 10) return true;
+
+    const text = normalizeText(el.innerText || el.textContent || "");
+    if (text.length > 120) return true;
+
+    return false;
+  }
+
+  function isElementNearReference(candidate, referenceEl) {
+    if (!(candidate instanceof Element) || !(referenceEl instanceof Element)) {
+      return false;
+    }
+
+    const controlRect = candidate.getBoundingClientRect();
+    const referenceRect = referenceEl.getBoundingClientRect();
+
     if (
-      el.matches(
-        "[role='combobox'], [aria-haspopup='listbox'], [aria-haspopup='tree'], [data-role='combobox'], [data-role='dropdown']"
-      )
+      !controlRect.width ||
+      !controlRect.height ||
+      !referenceRect.width ||
+      !referenceRect.height
     ) {
       return true;
     }
 
-    if (hasDropdownLikeClassName(el)) {
-      return true;
+    const verticalOverlap =
+      Math.min(controlRect.bottom, referenceRect.bottom) -
+      Math.max(controlRect.top, referenceRect.top);
+    const horizontalOverlap =
+      Math.min(controlRect.right, referenceRect.right) -
+      Math.max(controlRect.left, referenceRect.left);
+
+    const sameRow =
+      verticalOverlap >= Math.min(controlRect.height, referenceRect.height) * 0.3 ||
+      Math.abs(controlRect.top - referenceRect.top) < 24 ||
+      Math.abs(controlRect.bottom - referenceRect.bottom) < 24;
+
+    const closeHorizontally =
+      horizontalOverlap > 0 ||
+      Math.abs(controlRect.left - referenceRect.right) < 160 ||
+      Math.abs(referenceRect.left - controlRect.right) < 160;
+
+    return sameRow && closeHorizontally;
+  }
+
+  function findOwnedDropdownControl(root, referenceEl, maxDepth = 2) {
+    if (!(root instanceof Element) || isBroadDropdownContainer(root)) return null;
+
+    const queue = [...root.children].map((child) => ({ node: child, depth: 1 }));
+    let found = null;
+
+    while (queue.length) {
+      const { node, depth } = queue.shift();
+
+      if (isDropdownLikeElement(node) && isElementNearReference(node, referenceEl)) {
+        if (found && found !== node) {
+          return null;
+        }
+        found = node;
+        continue;
+      }
+
+      if (depth >= maxDepth) {
+        continue;
+      }
+
+      queue.push(...[...node.children].map((child) => ({ node: child, depth: depth + 1 })));
     }
 
-    if (el.matches("input[readonly], input[aria-haspopup], input[role='combobox']")) {
-      return true;
-    }
-
-    if (el.querySelector("input[readonly], input[aria-haspopup], input[role='combobox']")) {
-      return true;
-    }
-
-    return false;
+    return found;
   }
 
   function getDropdownTriggerTarget(rawTarget) {
     if (!(rawTarget instanceof Element)) return null;
 
     let node = rawTarget;
-    while (node && node !== document.documentElement) {
+    let depth = 0;
+
+    while (node && node !== document.documentElement && depth < 6) {
       if (isDropdownLikeElement(node)) {
         return node;
       }
+
+      const ownedControl = findOwnedDropdownControl(node, rawTarget);
+      if (ownedControl) {
+        return ownedControl;
+      }
+
       node = node.parentElement;
+      depth += 1;
+    }
+
+    return null;
+  }
+
+  function findNearbyButtonLikeTarget(referenceEl, maxDepth = 3) {
+    if (!(referenceEl instanceof Element)) return null;
+
+    let node = referenceEl;
+    let depth = 0;
+
+    while (node && node !== document.documentElement && depth < maxDepth) {
+      const parent = node.parentElement;
+      if (!parent || isBroadDropdownContainer(parent)) {
+        node = parent;
+        depth += 1;
+        continue;
+      }
+
+      const candidates = [...parent.querySelectorAll("*")]
+        .map((candidate) => {
+          if (
+            candidate === referenceEl ||
+            candidate.contains(referenceEl) ||
+            !isButtonLikeElement(candidate) ||
+            !isVisible(candidate) ||
+            !isElementNearReference(candidate, referenceEl)
+          ) {
+            return null;
+          }
+
+          let score = 0;
+          if (
+            candidate.matches(
+              "button, input[type='button'], input[type='submit'], input[type='reset']"
+            )
+          ) {
+            score += 80;
+          } else if (candidate.matches("[role='button'], a")) {
+            score += 40;
+          } else if (hasButtonLikeClassName(candidate)) {
+            score += 10;
+          }
+
+          if (candidate.parentElement === parent) {
+            score += 10;
+          }
+
+          return { candidate, score };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.score - a.score);
+
+      if (candidates.length && candidates[0].score > 0) {
+        return candidates[0].candidate;
+      }
+
+      node = parent;
+      depth += 1;
     }
 
     return null;
@@ -760,17 +895,17 @@
         return;
       }
 
-      const dropdownTrigger = getDropdownTriggerTarget(event.target);
-      if (dropdownTrigger) {
-        rememberDropdownRecord(dropdownTrigger);
-        return;
-      }
-
       if (pendingDropdownRecord) {
         const recorded = await finalizePendingDropdownRecord();
         if (recorded) {
           return;
         }
+      }
+
+      const dropdownTrigger = getDropdownTriggerTarget(event.target);
+      if (dropdownTrigger) {
+        rememberDropdownRecord(dropdownTrigger);
+        return;
       }
 
       const el = getClickableTarget(event.target);
@@ -1020,6 +1155,53 @@
     return hasDropdownLikeClassName(el);
   }
 
+  function extractChangedValueFragment(beforeValue, afterValue) {
+    const before = normalizeText(beforeValue);
+    const after = normalizeText(afterValue);
+
+    if (!after || before === after) {
+      return "";
+    }
+
+    let start = 0;
+    while (start < before.length && start < after.length && before[start] === after[start]) {
+      start += 1;
+    }
+
+    let beforeEnd = before.length - 1;
+    let afterEnd = after.length - 1;
+    while (beforeEnd >= start && afterEnd >= start && before[beforeEnd] === after[afterEnd]) {
+      beforeEnd -= 1;
+      afterEnd -= 1;
+    }
+
+    return after
+      .slice(start, afterEnd + 1)
+      .replace(/^[:\-\s]+|[:\-\s]+$/g, "")
+      .trim();
+  }
+
+  function getDropdownOptionQueries(beforeValue, targetValue) {
+    const normalizedTarget = normalizeText(targetValue);
+    const queries = [];
+
+    if (normalizedTarget) {
+      queries.push(normalizedTarget);
+    }
+
+    const changedFragment = extractChangedValueFragment(beforeValue, normalizedTarget);
+    if (changedFragment && !queries.includes(changedFragment)) {
+      queries.push(changedFragment);
+    }
+
+    const colonFragment = normalizedTarget.split(":").pop()?.trim();
+    if (colonFragment && !queries.includes(colonFragment)) {
+      queries.push(colonFragment);
+    }
+
+    return queries;
+  }
+
   function scoreDropdownOptionCandidate(el, expected) {
     if (!(el instanceof Element)) return -1;
     if (!isVisible(el)) return -1;
@@ -1027,16 +1209,26 @@
     const text = normalizeText(el.innerText || el.textContent || "");
     if (!text) return -1;
 
-    const normalizedExpected = normalizeText(expected);
-    if (!normalizedExpected) return -1;
+    const expectedTexts = (Array.isArray(expected) ? expected : [expected])
+      .map((value) => normalizeText(value))
+      .filter(Boolean);
+    if (!expectedTexts.length) return -1;
 
-    if (text !== normalizedExpected && !text.includes(normalizedExpected)) {
+    let matchedExpected = "";
+    for (const candidate of expectedTexts) {
+      if (text === candidate || text.includes(candidate)) {
+        matchedExpected = candidate;
+        break;
+      }
+    }
+
+    if (!matchedExpected) {
       return -1;
     }
 
     let score = 0;
 
-    if (text === normalizedExpected) score += 100;
+    if (text === matchedExpected) score += 100;
     if (el.matches("[role='option'], [role='treeitem'], [role='menuitem']")) score += 40;
     if (el.closest("[role='listbox'], [role='tree'], [role='menu']")) score += 30;
     if (el.matches("li, button, a")) score += 20;
@@ -1081,6 +1273,7 @@
     }
 
     const beforeValue = getElementDisplayValue(trigger);
+    const optionQueries = getDropdownOptionQueries(beforeValue, step.value ?? "");
 
     trigger.scrollIntoView({
       block: "center",
@@ -1092,7 +1285,27 @@
     fireMouseSequence(trigger);
     await delay(250);
 
-    const option = await waitForDropdownOption(step.value ?? "", step.timeout || 10000, 200);
+    let option = null;
+    try {
+      option = await waitForDropdownOption(optionQueries, 1200, 200);
+    } catch {
+      const alternateTrigger = findNearbyButtonLikeTarget(trigger);
+      if (!alternateTrigger) {
+        throw new Error(`드롭다운 옵션을 찾지 못했습니다: ${step.value}`);
+      }
+
+      alternateTrigger.scrollIntoView({
+        block: "center",
+        inline: "center"
+      });
+
+      await delay(120);
+      alternateTrigger.focus?.();
+      fireMouseSequence(alternateTrigger);
+      await delay(250);
+      option = await waitForDropdownOption(optionQueries, step.timeout || 10000, 200);
+    }
+
     option.scrollIntoView({
       block: "center",
       inline: "center"

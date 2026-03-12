@@ -902,13 +902,34 @@
         }
       }
 
+      const el = getClickableTarget(event.target);
       const dropdownTrigger = getDropdownTriggerTarget(event.target);
+      const shouldRecordClickBeforeDropdown =
+        !!el &&
+        !!dropdownTrigger &&
+        el !== dropdownTrigger &&
+        isButtonLikeElement(el) &&
+        !isDropdownLikeElement(el);
+
+      if (shouldRecordClickBeforeDropdown) {
+        const selector = buildSelector(el);
+        if (selector) {
+          await recordAction({
+            type: "click",
+            selector,
+            label: getHumanLabel(el)
+          });
+        }
+
+        rememberDropdownRecord(dropdownTrigger);
+        return;
+      }
+
       if (dropdownTrigger) {
         rememberDropdownRecord(dropdownTrigger);
         return;
       }
 
-      const el = getClickableTarget(event.target);
       if (!el) return;
 
       const selector = buildSelector(el);
@@ -1273,6 +1294,10 @@
     }
 
     const beforeValue = getElementDisplayValue(trigger);
+    if (beforeValue && normalizeText(step.value) && beforeValue.includes(normalizeText(step.value))) {
+      return;
+    }
+
     const optionQueries = getDropdownOptionQueries(beforeValue, step.value ?? "");
 
     trigger.scrollIntoView({

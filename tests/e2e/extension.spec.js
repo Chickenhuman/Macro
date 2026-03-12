@@ -80,6 +80,76 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/popup-picker-root.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Popup Picker Root",
+          `
+            <style>
+              .picker_row {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+              }
+
+              #archiveInput {
+                width: 220px;
+                height: 32px;
+                padding: 0 10px;
+                border: 1px solid #999;
+              }
+            </style>
+            <div class="picker_row">
+              <input id="archiveInput" type="text" readonly value="" />
+              <button id="openArchivePopup" type="button">선택</button>
+              <span id="retentionPeriod">보존기간 : -</span>
+            </div>
+          `,
+          `
+            document.querySelector("#openArchivePopup").addEventListener("click", () => {
+              window.open("/popup-picker-child.html", "archive-picker", "width=480,height=320");
+            });
+          `
+        )
+      );
+      return;
+    }
+
+    if (route === "/popup-picker-child.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Popup Picker Child",
+          `
+            <button id="archiveOption" type="button">회계전표</button>
+          `,
+          `
+            document.querySelector("#archiveOption").addEventListener("click", () => {
+              const openerDocument = window.opener && window.opener.document;
+              if (openerDocument) {
+                const archiveInput = openerDocument.querySelector("#archiveInput");
+                const retentionPeriod = openerDocument.querySelector("#retentionPeriod");
+
+                archiveInput.value = "회계전표";
+                archiveInput.dispatchEvent(new Event("input", { bubbles: true }));
+                archiveInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+                if (retentionPeriod) {
+                  retentionPeriod.textContent = "보존기간 : 10년";
+                }
+              }
+
+              setTimeout(() => {
+                window.close();
+              }, 0);
+            });
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/run-root.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -801,6 +871,7 @@ test.describe("extension smoke tests", () => {
     const recordedStorage = await readStorage(extensionPage);
     const recordedSteps = recordedStorage.macroSteps || [];
 
+    expect(recordedSteps.some((step) => step.type === "click" && step.selector === "#archivePickerButton")).toBe(true);
     expect(
       recordedSteps.some(
         (step) =>
@@ -809,9 +880,6 @@ test.describe("extension smoke tests", () => {
           step.value === "선택 보존기간 : 10년"
       )
     ).toBe(true);
-    expect(recordedSteps.some((step) => step.type === "click" && step.selector === "#archivePickerButton")).toBe(
-      false
-    );
 
     await recordPage.close();
 
@@ -832,7 +900,7 @@ test.describe("extension smoke tests", () => {
     const runResponse = await sendRuntimeMessage(extensionPage, {
       type: "START_MACRO_RUN",
       tabId: runTabId,
-      steps: [dropdownStep]
+      steps: recordedSteps.filter((step) => ["click", "dropdownSelect"].includes(step.type))
     });
     expect(runResponse.ok).toBe(true);
 
@@ -841,5 +909,71 @@ test.describe("extension smoke tests", () => {
         return await runPage.inputValue("#archivePickerInput");
       })
       .toBe("선택 보존기간 : 10년");
+  });
+
+  test("records popup picker opener clicks and replays the full popup flow", async () => {
+    const rootPage = await bundle.context.newPage();
+    await rootPage.goto(`${server.baseUrl}/popup-picker-root.html`);
+
+    const tabId = await findTabId(extensionPage, rootPage.url());
+    expect(tabId).toBeTruthy();
+
+    const startResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_RECORDING",
+      tabId
+    });
+    expect(startResponse.ok).toBe(true);
+
+    const popupPromise = bundle.context.waitForEvent("page");
+    await rootPage.click("#openArchivePopup");
+    const popupPage = await popupPromise;
+    await popupPage.waitForLoadState("domcontentloaded");
+
+    const popupClosed = popupPage.waitForEvent("close");
+    await popupPage.click("#archiveOption");
+    await popupClosed;
+
+    await expect
+      .poll(async () => {
+        return await rootPage.inputValue("#archiveInput");
+      })
+      .toBe("회계전표");
+
+    const stopResponse = await sendRuntimeMessage(extensionPage, {
+      type: "STOP_RECORDING"
+    });
+    expect(stopResponse.ok).toBe(true);
+
+    const storage = await readStorage(extensionPage);
+    const steps = storage.macroSteps || [];
+
+    expect(steps.some((step) => step.type === "click" && step.selector === "#openArchivePopup")).toBe(true);
+    expect(
+      steps.some(
+        (step) => step.type === "waitForPopup" && String(step.urlIncludes || "").includes("popup-picker-child.html")
+      )
+    ).toBe(true);
+    expect(steps.some((step) => step.type === "click" && step.selector === "#archiveOption")).toBe(true);
+
+    await rootPage.close();
+
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/popup-picker-root.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return await runPage.inputValue("#archiveInput");
+      })
+      .toBe("회계전표");
   });
 });

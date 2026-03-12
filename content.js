@@ -1024,6 +1024,29 @@
     throw new Error(`요소를 찾지 못했습니다: ${selector}`);
   }
 
+  async function waitForVisibleElement(selector, timeout = 10000, interval = 200) {
+    const startedAt = Date.now();
+    let sawElement = false;
+
+    while (Date.now() - startedAt < timeout) {
+      const el = document.querySelector(selector);
+      if (el) {
+        sawElement = true;
+        if (isVisible(el)) {
+          return el;
+        }
+      }
+
+      await delay(interval);
+    }
+
+    if (sawElement) {
+      throw new Error(`요소가 보이지 않습니다: ${selector}`);
+    }
+
+    throw new Error(`요소를 찾지 못했습니다: ${selector}`);
+  }
+
   function isVisible(el) {
     if (!el) return false;
 
@@ -1385,7 +1408,7 @@
   }
 
   async function doClick(step) {
-    const raw = await waitForElement(step.selector, step.timeout || 10000);
+    const raw = await waitForVisibleElement(step.selector, step.timeout || 10000, 200);
 
     if (isCheckboxLikeElement(raw)) {
       await clickCheckboxLike(raw, step);

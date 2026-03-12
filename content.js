@@ -1047,6 +1047,12 @@
     throw new Error(`요소를 찾지 못했습니다: ${selector}`);
   }
 
+  function requiresVisibleClickTarget(el) {
+    if (!(el instanceof Element)) return false;
+
+    return findOptionLikeClickTarget(el) === el;
+  }
+
   function isVisible(el) {
     if (!el) return false;
 
@@ -1408,7 +1414,11 @@
   }
 
   async function doClick(step) {
-    const raw = await waitForVisibleElement(step.selector, step.timeout || 10000, 200);
+    let raw = await waitForElement(step.selector, step.timeout || 10000, 200);
+
+    if (requiresVisibleClickTarget(raw)) {
+      raw = await waitForVisibleElement(step.selector, step.timeout || 10000, 200);
+    }
 
     if (isCheckboxLikeElement(raw)) {
       await clickCheckboxLike(raw, step);

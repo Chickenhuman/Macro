@@ -743,34 +743,44 @@ function getRecordingAttachDecision(tab, recording) {
   };
 }
 
-function scorePopupCandidate(tab, runState, step) {
+function scorePopupCandidate(tab, runState, step, options = {}) {
   if (!tab || !isFiniteTabId(tab.id)) return -1;
   if (isRestrictedUrl(tab.url || "")) return -1;
   if (tab.id === runState.currentTabId) return -1;
 
+  const allowSameOriginFallback = options.allowSameOriginFallback !== false;
   const expected = String(step.urlIncludes || "").trim();
   if (expected && !(tab.url || "").includes(expected)) {
     return -1;
   }
 
   let score = 0;
+  let matchedRelationship = false;
 
   const openerCandidates = [runState.currentTabId, runState.rootTabId].filter(isFiniteTabId);
   if (openerCandidates.includes(tab.openerTabId)) {
     score += 100;
+    matchedRelationship = true;
   }
 
   if ((runState.pendingPopupTabIds || []).includes(tab.id)) {
     score += 90;
+    matchedRelationship = true;
   }
 
+  const knownAtWaitStart = new Set(runState.knownTabIdsAtWaitStart || []);
   const sameOriginOtherWindow =
     runState.rootWindowId != null &&
     tab.windowId !== runState.rootWindowId &&
     isSameOriginOrHostname(tab.url || "", runState.rootOrigin, runState.rootHostname);
 
-  if (sameOriginOtherWindow) {
+  if (allowSameOriginFallback && sameOriginOtherWindow && !knownAtWaitStart.has(tab.id)) {
     score += 70;
+    matchedRelationship = true;
+  }
+
+  if (!matchedRelationship) {
+    return -1;
   }
 
   if (tab.active) {
@@ -784,12 +794,12 @@ function scorePopupCandidate(tab, runState, step) {
   return score;
 }
 
-function findBestPopupCandidate(tabs, runState, step) {
+function findBestPopupCandidate(tabs, runState, step, options = {}) {
   let bestTab = null;
   let bestScore = -1;
 
   for (const tab of tabs || []) {
-    const score = scorePopupCandidate(tab, runState, step);
+    const score = scorePopupCandidate(tab, runState, step, options);
     if (score > bestScore) {
       bestScore = score;
       bestTab = tab;
@@ -875,7 +885,10 @@ async function restoreRunToPreviousTab(runState, closedTabId) {
 
 async function handleWaitForPopupStep(runState, step) {
   const tabs = await chrome.tabs.query({});
-  const found = findBestPopupCandidate(tabs, runState, step);
+  const hasPreStepKnownTabs = (runState.knownTabIdsAtWaitStart || []).length > 0;
+  const found = findBestPopupCandidate(tabs, runState, step, {
+    allowSameOriginFallback: hasPreStepKnownTabs
+  });
 
   if (found) {
     const nextState = await switchRunToTab(
@@ -902,7 +915,8 @@ async function handleWaitForPopupStep(runState, step) {
     popupWaitStartedAt: Date.now(),
     lastMessage: `새 창 대기 중: ${step.urlIncludes || "URL 조건 없음"}`,
     error: "",
-    knownTabIdsAtWaitStart: tabs.map((tab) => tab.id).filter(isFiniteTabId)
+    knownTabIdsAtWaitStart:
+      hasPreStepKnownTabs ? runState.knownTabIdsAtWaitStart : tabs.map((tab) => tab.id).filter(isFiniteTabId)
   });
 }
 
@@ -936,6 +950,13 @@ async function continueMacroRun(passedState) {
     }
 
     try {
+      const nextStep = sanitizeStep(runState.steps[runState.stepIndex + 1]);
+      let knownTabIdsAtWaitStart = [];
+      if (nextStep?.type === "waitForPopup") {
+        const tabsBeforeAction = await chrome.tabs.query({});
+        knownTabIdsAtWaitStart = tabsBeforeAction.map((tab) => tab.id).filter(isFiniteTabId);
+      }
+
       const tab = await chrome.tabs.get(runState.currentTabId);
       if (isRestrictedUrl(tab.url || "")) {
         throw new Error("현재 실행 탭은 확장 실행이 허용되지 않는 페이지입니다.");
@@ -959,7 +980,8 @@ async function continueMacroRun(passedState) {
         lastMessage:
           response.message ||
           `${runState.stepIndex + 1} / ${runState.steps.length} step 완료`,
-        error: ""
+        error: "",
+        knownTabIdsAtWaitStart
       });
     } catch (error) {
       await failRun(error?.message || String(error));

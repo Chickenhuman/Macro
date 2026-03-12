@@ -66,6 +66,7 @@ async function startFixtureServer() {
     }
 
     if (route === "/popup-child.html") {
+      const source = new URL(req.url, "http://127.0.0.1").searchParams.get("source") || "default";
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
         renderPage(
@@ -74,6 +75,12 @@ async function startFixtureServer() {
             <label for="popupInput">팝업 입력</label>
             <input id="popupInput" type="text" />
             <button id="popupSave" type="button">저장</button>
+            <div id="popupStatus">${source}</div>
+          `,
+          `
+            document.querySelector("#popupSave").addEventListener("click", () => {
+              document.querySelector("#popupStatus").textContent = "saved-${source}";
+            });
           `
         )
       );
@@ -161,6 +168,26 @@ async function startFixtureServer() {
           `
             document.querySelector("#openPopupBtn").addEventListener("click", () => {
               window.open("/run-child.html", "macro-run-popup", "width=480,height=320");
+            });
+          `
+        )
+      );
+      return;
+    }
+
+    if (route === "/delayed-popup-root.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Delayed Popup Root",
+          `
+            <button id="openPopupBtn" type="button">팝업 열기</button>
+          `,
+          `
+            document.querySelector("#openPopupBtn").addEventListener("click", () => {
+              setTimeout(() => {
+                window.open("/popup-child.html?source=expected", "macro-delayed-popup", "width=480,height=320");
+              }, 600);
             });
           `
         )
@@ -1029,6 +1056,63 @@ test.describe("extension smoke tests", () => {
         error: "",
         lastMessage: "실행 완료"
       });
+  });
+
+  test("waits for a newly opened popup instead of switching to an older matching window", async () => {
+    const staleRootPage = await bundle.context.newPage();
+    await staleRootPage.goto(`${server.baseUrl}/popup-root.html`);
+
+    const stalePopupPromise = bundle.context.waitForEvent("page");
+    await staleRootPage.click("#openPopupBtn");
+    const stalePopup = await stalePopupPromise;
+    await stalePopup.waitForLoadState("domcontentloaded");
+
+    const rootPage = await bundle.context.newPage();
+    await rootPage.goto(`${server.baseUrl}/delayed-popup-root.html`);
+
+    const tabId = await findTabId(extensionPage, rootPage.url());
+    expect(tabId).toBeTruthy();
+
+    const steps = [
+      {
+        type: "click",
+        selector: "#openPopupBtn",
+        label: "팝업 열기"
+      },
+      {
+        type: "waitForPopup",
+        urlIncludes: "popup-child.html",
+        timeout: 10000
+      },
+      {
+        type: "click",
+        selector: "#popupSave",
+        label: "저장"
+      }
+    ];
+
+    const expectedPopupPromise = bundle.context.waitForEvent("page");
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId,
+      steps
+    });
+    expect(runResponse.ok).toBe(true);
+
+    const expectedPopup = await expectedPopupPromise;
+    await expectedPopup.waitForLoadState("domcontentloaded");
+
+    await expect
+      .poll(async () => {
+        return await expectedPopup.textContent("#popupStatus");
+      })
+      .toBe("saved-expected");
+
+    await expect
+      .poll(async () => {
+        return await stalePopup.textContent("#popupStatus");
+      })
+      .toBe("default");
   });
 
   test("records and runs PUDD-style checkbox and button clicks", async () => {

@@ -37,7 +37,10 @@ const DEFAULT_RUN_STATE = {
   lastMessage: "대기",
   error: "",
   pendingPopupTabIds: [],
-  knownTabIdsAtWaitStart: []
+  knownTabIdsAtWaitStart: [],
+  activeStepIndex: -1,
+  activeStepType: "",
+  activeStepTabId: null
 };
 
 const DEFAULT_DEBUG_STATE = {
@@ -309,6 +312,9 @@ async function setRunState(state) {
     nextState.popupWaitStartedAt = 0;
     nextState.pendingPopupTabIds = [];
     nextState.knownTabIdsAtWaitStart = [];
+    nextState.activeStepIndex = -1;
+    nextState.activeStepType = "";
+    nextState.activeStepTabId = null;
   }
 
   await chrome.storage.local.set({
@@ -957,6 +963,14 @@ async function continueMacroRun(passedState) {
         knownTabIdsAtWaitStart = tabsBeforeAction.map((tab) => tab.id).filter(isFiniteTabId);
       }
 
+      runState = await setRunState({
+        ...runState,
+        activeStepIndex: runState.stepIndex,
+        activeStepType: step.type,
+        activeStepTabId: runState.currentTabId,
+        knownTabIdsAtWaitStart
+      });
+
       const tab = await chrome.tabs.get(runState.currentTabId);
       if (isRestrictedUrl(tab.url || "")) {
         throw new Error("현재 실행 탭은 확장 실행이 허용되지 않는 페이지입니다.");
@@ -981,9 +995,23 @@ async function continueMacroRun(passedState) {
           response.message ||
           `${runState.stepIndex + 1} / ${runState.steps.length} step 완료`,
         error: "",
-        knownTabIdsAtWaitStart
+        knownTabIdsAtWaitStart,
+        activeStepIndex: -1,
+        activeStepType: "",
+        activeStepTabId: null
       });
     } catch (error) {
+      if (isRetryableTabMessageError(error) && step.type === "click") {
+        await delay(250);
+        const latestRunState = await getRunState();
+        if (
+          latestRunState.running &&
+          latestRunState.stepIndex > runState.stepIndex &&
+          latestRunState.activeStepIndex === -1
+        ) {
+          return;
+        }
+      }
       await failRun(error?.message || String(error));
       return;
     }
@@ -1175,6 +1203,11 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   }
 
   if (runState.currentTabId === tabId) {
+    const shouldAdvanceClosedClickStep =
+      runState.activeStepType === "click" &&
+      runState.activeStepTabId === tabId &&
+      runState.activeStepIndex === runState.stepIndex;
+
     const restoredState = await restoreRunToPreviousTab(
       {
         ...runState,
@@ -1185,7 +1218,18 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
       tabId
     );
     if (restoredState?.running) {
-      await continueMacroRun(restoredState);
+      const nextState = shouldAdvanceClosedClickStep
+        ? await setRunState({
+            ...restoredState,
+            stepIndex: restoredState.stepIndex + 1,
+            activeStepIndex: -1,
+            activeStepType: "",
+            activeStepTabId: null,
+            lastMessage: `팝업이 닫혀 click step 완료 후 복귀: ${restoredState.lastMessage}`
+          })
+        : restoredState;
+
+      await continueMacroRun(nextState);
     }
     return;
   }

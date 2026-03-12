@@ -122,7 +122,8 @@ function loadBackgroundHarness() {
     chrome,
     context,
     registries,
-    storage: storage.state
+    storage: storage.state,
+    tabs
   };
 }
 
@@ -171,4 +172,62 @@ test("START_RECORDING resets recording state and returns an error when root tab 
     knownTabIdsAtStart: [],
     popupStepRecordedTabIds: []
   });
+});
+
+test("advances an in-flight click step when the popup tab closes before the content response returns", async () => {
+  const harness = loadBackgroundHarness();
+  const onRemoved = harness.registries.tabsOnRemoved.listeners[0];
+
+  harness.tabs.set(2, {
+    id: 2,
+    url: "https://example.com/popup",
+    windowId: 11
+  });
+
+  let continuedState = null;
+  harness.context.continueMacroRun = async (state) => {
+    continuedState = normalize(state);
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 2,
+    currentTabTrail: [1],
+    steps: [
+      {
+        type: "click",
+        selector: "#set_apprv",
+        label: "반영"
+      },
+      {
+        type: "click",
+        selector: "#btnConfirmD",
+        label: "확인"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 중",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: 0,
+    activeStepType: "click",
+    activeStepTabId: 2
+  };
+
+  await onRemoved(2);
+
+  assert.equal(continuedState.currentTabId, 1);
+  assert.equal(continuedState.stepIndex, 1);
+  assert.equal(continuedState.activeStepIndex, -1);
+  assert.equal(continuedState.activeStepType, "");
+  assert.equal(continuedState.activeStepTabId, null);
 });

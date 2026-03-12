@@ -115,6 +115,79 @@
     return normalizeText(el.innerText || el.textContent || "");
   }
 
+  function isMeaningfulStepLabel(label) {
+    const text = normalizeText(label);
+    if (!text) return false;
+    if (text.length <= 1) return false;
+
+    return !GENERIC_STEP_LABELS.has(text.toLowerCase());
+  }
+
+  function getLabelMatchScore(actualLabel, expectedLabel) {
+    const actual = normalizeText(actualLabel);
+    const expected = normalizeText(expectedLabel);
+    if (!actual || !expected) return -1;
+
+    if (actual === expected) return 300;
+    if (actual.includes(expected)) return 220;
+    return -1;
+  }
+
+  function hasMatchingLabel(el, expectedLabel) {
+    return getLabelMatchScore(getHumanLabel(el), expectedLabel) >= 0;
+  }
+
+  function getStableClassTokens(el) {
+    if (!(el instanceof Element) || typeof el.className !== "string") return [];
+
+    return el.className
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token && isStableClassName(token));
+  }
+
+  function getClassOverlapScore(a, b) {
+    const aTokens = getStableClassTokens(a);
+    const bTokens = new Set(getStableClassTokens(b));
+    let overlap = 0;
+
+    for (const token of aTokens) {
+      if (bTokens.has(token)) {
+        overlap += 1;
+      }
+    }
+
+    return Math.min(20, overlap * 5);
+  }
+
+  function getDomDistance(a, b) {
+    if (!(a instanceof Element) || !(b instanceof Element)) {
+      return Number.POSITIVE_INFINITY;
+    }
+
+    const seen = new Map();
+    let node = a;
+    let depth = 0;
+
+    while (node) {
+      seen.set(node, depth);
+      node = node.parentElement;
+      depth += 1;
+    }
+
+    node = b;
+    depth = 0;
+    while (node) {
+      if (seen.has(node)) {
+        return seen.get(node) + depth;
+      }
+      node = node.parentElement;
+      depth += 1;
+    }
+
+    return Number.POSITIVE_INFINITY;
+  }
+
   const DROPDOWN_TRIGGER_SELECTOR = [
     "[role='combobox']",
     "[aria-haspopup='listbox']",
@@ -125,6 +198,43 @@
     "input[aria-haspopup]",
     "input[role='combobox']"
   ].join(", ");
+
+  const BUTTON_LIKE_CANDIDATE_SELECTOR = [
+    "button",
+    "a",
+    "[role='button']",
+    "[onclick]",
+    "input[type='button']",
+    "input[type='submit']",
+    "input[type='reset']",
+    ".btn",
+    ".button",
+    ".PUDD-UI-Button",
+    ".psh_btn",
+    ".submit"
+  ].join(", ");
+
+  const GENERIC_STEP_LABELS = new Set([
+    "a",
+    "button",
+    "div",
+    "em",
+    "i",
+    "img",
+    "input",
+    "label",
+    "li",
+    "option",
+    "p",
+    "path",
+    "section",
+    "span",
+    "strong",
+    "svg",
+    "td",
+    "tr",
+    "ul"
+  ]);
 
   function summarizeElement(el) {
     if (!(el instanceof Element)) return null;
@@ -809,6 +919,51 @@
     return hasButtonLikeClassName(el);
   }
 
+  function findMatchingButtonLikeTarget(expectedLabel, referenceEl) {
+    const seen = new Set();
+    let best = null;
+    let bestScore = -1;
+
+    for (const node of document.querySelectorAll(BUTTON_LIKE_CANDIDATE_SELECTOR)) {
+      const candidate = getClickableTarget(node);
+      if (!(candidate instanceof Element)) continue;
+      if (!isButtonLikeElement(candidate)) continue;
+      if (!isVisible(candidate)) continue;
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+
+      const labelScore = getLabelMatchScore(getHumanLabel(candidate), expectedLabel);
+      if (labelScore < 0) continue;
+
+      let score = labelScore;
+      if (referenceEl instanceof Element) {
+        if (candidate.tagName === referenceEl.tagName) {
+          score += 30;
+        }
+
+        const candidateType = candidate.getAttribute("type") || "";
+        const referenceType = referenceEl.getAttribute("type") || "";
+        if (candidateType && candidateType === referenceType) {
+          score += 20;
+        }
+
+        score += getClassOverlapScore(candidate, referenceEl);
+
+        const distance = getDomDistance(candidate, referenceEl);
+        if (Number.isFinite(distance)) {
+          score += Math.max(0, 25 - Math.min(distance, 25));
+        }
+      }
+
+      if (score > bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    }
+
+    return best;
+  }
+
   function findOptionLikeClickTarget(rawTarget) {
     if (!(rawTarget instanceof Element)) return null;
 
@@ -1024,30 +1179,7 @@
     throw new Error(`요소를 찾지 못했습니다: ${selector}`);
   }
 
-  async function waitForVisibleElement(selector, timeout = 10000, interval = 200) {
-    const startedAt = Date.now();
-    let sawElement = false;
-
-    while (Date.now() - startedAt < timeout) {
-      const el = document.querySelector(selector);
-      if (el) {
-        sawElement = true;
-        if (isVisible(el)) {
-          return el;
-        }
-      }
-
-      await delay(interval);
-    }
-
-    if (sawElement) {
-      throw new Error(`요소가 보이지 않습니다: ${selector}`);
-    }
-
-    throw new Error(`요소를 찾지 못했습니다: ${selector}`);
-  }
-
-  function requiresVisibleClickTarget(el) {
+  function requiresVisibleOptionTarget(el) {
     if (!(el instanceof Element)) return false;
 
     return findOptionLikeClickTarget(el) === el;
@@ -1103,6 +1235,63 @@
     }
 
     return null;
+  }
+
+  function getPreferredClickTarget(step, raw) {
+    if (!(raw instanceof Element)) return null;
+
+    if (isCheckboxLikeElement(raw)) {
+      return raw;
+    }
+
+    if (requiresVisibleOptionTarget(raw) && !isVisible(raw)) {
+      return null;
+    }
+
+    const resolved = resolveVisibleClickTarget(raw);
+    if (!resolved) {
+      return null;
+    }
+
+    if (!isMeaningfulStepLabel(step?.label)) {
+      return raw;
+    }
+
+    if (hasMatchingLabel(raw, step.label) || hasMatchingLabel(resolved, step.label)) {
+      return raw;
+    }
+
+    return findMatchingButtonLikeTarget(step.label, resolved);
+  }
+
+  async function waitForClickTarget(step, timeout = 10000, interval = 200) {
+    const startedAt = Date.now();
+    let lastFound = null;
+
+    while (Date.now() - startedAt < timeout) {
+      const raw = document.querySelector(step.selector);
+      if (raw) {
+        lastFound = raw;
+        const preferred = getPreferredClickTarget(step, raw);
+        if (preferred) {
+          return preferred;
+        }
+      }
+
+      await delay(interval);
+    }
+
+    if (lastFound) {
+      if (requiresVisibleOptionTarget(lastFound) && !isVisible(lastFound)) {
+        throw new Error(`요소가 보이지 않습니다: ${step.selector}`);
+      }
+
+      if (isMeaningfulStepLabel(step?.label)) {
+        throw new Error(`라벨과 일치하는 클릭 대상을 찾지 못했습니다: ${step.label}`);
+      }
+    }
+
+    throw new Error(`요소를 찾지 못했습니다: ${step.selector}`);
   }
 
   function fireMouseSequence(el) {
@@ -1414,11 +1603,7 @@
   }
 
   async function doClick(step) {
-    let raw = await waitForElement(step.selector, step.timeout || 10000, 200);
-
-    if (requiresVisibleClickTarget(raw)) {
-      raw = await waitForVisibleElement(step.selector, step.timeout || 10000, 200);
-    }
+    const raw = await waitForClickTarget(step, step.timeout || 10000, 200);
 
     if (isCheckboxLikeElement(raw)) {
       await clickCheckboxLike(raw, step);

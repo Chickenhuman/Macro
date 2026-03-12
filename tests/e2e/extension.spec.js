@@ -534,6 +534,77 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/button-label-recovery.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Button Label Recovery",
+          `
+            <style>
+              .psh_btnbox {
+                display: flex;
+                gap: 10px;
+                align-items: center;
+              }
+
+              .PUDD.PUDD-COLOR-blue.PUDD-UI-Button {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 120px;
+                height: 36px;
+                padding: 0 12px;
+                border: 1px solid #9aa4b2;
+                background: #fff;
+              }
+
+              .psh_btn {
+                width: 100%;
+                height: 100%;
+                border: 0;
+                background: transparent;
+                cursor: pointer;
+              }
+            </style>
+            <div class="psh_btnbox" id="buttonToolbar">
+              <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+                <input class="psh_btn" type="button" value="열람자확인" />
+              </div>
+              <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+                <input class="psh_btn" type="button" value="문서수정내역" />
+              </div>
+              <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+                <input class="psh_btn" type="button" value="결재라인선택" />
+              </div>
+              <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button" id="approvalWrap">
+                <input class="psh_btn" type="button" value="결재" />
+              </div>
+            </div>
+            <div id="clickedLabel"></div>
+          `,
+          `
+            const toolbar = document.querySelector("#buttonToolbar");
+            const clickedLabel = document.querySelector("#clickedLabel");
+
+            toolbar.addEventListener("click", (event) => {
+              if (event.target.matches("input.psh_btn")) {
+                clickedLabel.textContent = event.target.value;
+              }
+            });
+
+            setTimeout(() => {
+              const wrap = document.createElement("div");
+              wrap.className = "PUDD PUDD-COLOR-blue PUDD-UI-Button";
+              wrap.innerHTML = '<input class="psh_btn" type="button" value="결재라인지정" />';
+
+              toolbar.insertBefore(wrap, document.querySelector("#approvalWrap"));
+            }, 900);
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/pudd-dropdown.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -1207,5 +1278,34 @@ test.describe("extension smoke tests", () => {
         return await runPage.textContent("#selectedLineLabel");
       })
       .toBe("풍력 1000만 이하");
+  });
+
+  test("prefers a visible button whose label matches when an nth-of-type selector is still settling", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/button-label-recovery.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const steps = [
+      {
+        type: "click",
+        selector: "div.PUDD.PUDD-COLOR-blue.PUDD-UI-Button:nth-of-type(4) > input.psh_btn",
+        label: "결재라인지정"
+      }
+    ];
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return await runPage.textContent("#clickedLabel");
+      })
+      .toBe("결재라인지정");
   });
 });

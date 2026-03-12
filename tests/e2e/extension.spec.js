@@ -386,6 +386,81 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/line-selector.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Line Selector",
+          `
+            <style>
+              #selMyKyuljaeLine {
+                position: relative;
+                display: inline-block;
+              }
+
+              #idMyApprvLineGroup {
+                display: none;
+                position: absolute;
+                top: 40px;
+                left: 0;
+                width: 220px;
+                padding: 8px 0;
+                border: 1px solid #bfc6d4;
+                background: #fff;
+              }
+
+              #idMyApprvLineGroup.open {
+                display: block;
+              }
+
+              #idMyApprvLineGroup ul {
+                list-style: none;
+                margin: 0;
+                padding: 0;
+              }
+
+              #idMyApprvLineGroup li {
+                padding: 8px 12px;
+                cursor: pointer;
+              }
+
+              #idMyApprvLineGroup li:hover {
+                background: #eef4ff;
+              }
+            </style>
+            <div id="selMyKyuljaeLine" class="controll_btn posi_re p0 fr">
+              <button id="btnLineGroup" type="button" class="btn_ud ud down al ellipsis">내 결재라인</button>
+              <div id="idMyApprvLineGroup" class="multi_sel_list signLineSel_list kl_sel">
+                <ul>
+                  <li><span id="lineOptionLow">풍력 1000만 이하</span></li>
+                  <li><span id="lineOptionHigh">풍력 고액</span></li>
+                </ul>
+              </div>
+            </div>
+            <div id="selectedLineLabel"></div>
+          `,
+          `
+            const trigger = document.querySelector("#btnLineGroup");
+            const list = document.querySelector("#idMyApprvLineGroup");
+            const label = document.querySelector("#selectedLineLabel");
+
+            trigger.addEventListener("click", () => {
+              list.classList.toggle("open");
+            });
+
+            document.querySelectorAll("#idMyApprvLineGroup span").forEach((option) => {
+              option.addEventListener("click", (event) => {
+                label.textContent = event.currentTarget.textContent.trim();
+                trigger.textContent = event.currentTarget.textContent.trim();
+                list.classList.remove("open");
+              });
+            });
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/pudd-dropdown.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -975,5 +1050,55 @@ test.describe("extension smoke tests", () => {
         return await runPage.inputValue("#archiveInput");
       })
       .toBe("회계전표");
+  });
+
+  test("records open list options instead of collapsing back to the opener control", async () => {
+    const recordPage = await bundle.context.newPage();
+    await recordPage.goto(`${server.baseUrl}/line-selector.html`);
+
+    const recordTabId = await findTabId(extensionPage, recordPage.url());
+    expect(recordTabId).toBeTruthy();
+
+    const startResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_RECORDING",
+      tabId: recordTabId
+    });
+    expect(startResponse.ok).toBe(true);
+
+    await recordPage.click("#btnLineGroup");
+    await recordPage.click("#lineOptionLow");
+
+    const stopResponse = await sendRuntimeMessage(extensionPage, {
+      type: "STOP_RECORDING"
+    });
+    expect(stopResponse.ok).toBe(true);
+
+    const storage = await readStorage(extensionPage);
+    const steps = storage.macroSteps || [];
+
+    expect(steps.some((step) => step.type === "click" && step.selector === "#btnLineGroup")).toBe(true);
+    expect(steps.some((step) => step.type === "click" && step.selector === "#lineOptionLow")).toBe(true);
+    expect(steps.some((step) => step.type === "click" && step.selector === "#selMyKyuljaeLine")).toBe(false);
+
+    await recordPage.close();
+
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/line-selector.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps: steps.filter((step) => step.type === "click")
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return await runPage.textContent("#selectedLineLabel");
+      })
+      .toBe("풍력 1000만 이하");
   });
 });

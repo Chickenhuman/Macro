@@ -809,12 +809,43 @@
     return hasButtonLikeClassName(el);
   }
 
+  function findOptionLikeClickTarget(rawTarget) {
+    if (!(rawTarget instanceof Element)) return null;
+
+    const optionTarget = rawTarget.closest(
+      "[role='option'], [role='treeitem'], [role='menuitem'], a.anchor, a[role='option']"
+    );
+    if (optionTarget) {
+      return optionTarget;
+    }
+
+    const listItem = rawTarget.closest("li");
+    if (!listItem) return null;
+
+    const listContainer = listItem.closest(
+      "[role='listbox'], [role='tree'], [role='menu'], .multi_sel_list, .signLineSel_list, .kl_sel, .dropdown-menu"
+    );
+    if (!listContainer) return null;
+
+    const explicitChild = rawTarget.closest("span, strong, em, div");
+    if (explicitChild && listItem.contains(explicitChild)) {
+      return explicitChild;
+    }
+
+    return listItem;
+  }
+
   function getClickableTarget(rawTarget) {
     if (!(rawTarget instanceof Element)) return null;
 
     const checkboxWrapper = findCheckboxLikeWrapper(rawTarget);
     if (checkboxWrapper) {
       return checkboxWrapper;
+    }
+
+    const optionTarget = findOptionLikeClickTarget(rawTarget);
+    if (optionTarget) {
+      return optionTarget;
     }
 
     let node = rawTarget;

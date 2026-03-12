@@ -1317,6 +1317,24 @@
     return el.hasAttribute("onclick");
   }
 
+  async function clickInMainWorld(step, el) {
+    const selector = safeBuildSelector(el) || step?.selector;
+    if (!selector) {
+      return false;
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      type: "EXECUTE_MAIN_WORLD_CLICK",
+      selector
+    });
+
+    if (!response?.ok) {
+      throw new Error(response?.message || `요소를 클릭하지 못했습니다: ${selector}`);
+    }
+
+    return true;
+  }
+
   function isCheckboxLikeElement(el) {
     if (!(el instanceof Element)) return false;
 
@@ -1631,6 +1649,13 @@
     });
 
     await delay(250);
+
+    if (prefersDirectClick(el) && typeof el.click === "function") {
+      const clickedInMainWorld = await clickInMainWorld(step, el);
+      if (clickedInMainWorld) {
+        return;
+      }
+    }
 
     el.focus?.();
 

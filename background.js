@@ -413,6 +413,51 @@ async function sendTabMessage(tabId, message) {
   return await chrome.tabs.sendMessage(tabId, message);
 }
 
+async function executeMainWorldClick(tabId, frameId, selector) {
+  const target = { tabId };
+
+  if (Number.isInteger(frameId) && frameId >= 0) {
+    target.frameIds = [frameId];
+  }
+
+  const results = await chrome.scripting.executeScript({
+    target,
+    world: "MAIN",
+    args: [selector],
+    func: (targetSelector) => {
+      const el = document.querySelector(targetSelector);
+      if (!(el instanceof Element)) {
+        return {
+          ok: false,
+          message: `요소를 찾지 못했습니다: ${targetSelector}`
+        };
+      }
+
+      el.scrollIntoView({
+        block: "center",
+        inline: "center"
+      });
+
+      if (typeof el.focus === "function") {
+        el.focus();
+      }
+
+      if (typeof el.click === "function") {
+        el.click();
+      } else {
+        el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      }
+
+      return { ok: true };
+    }
+  });
+
+  return results?.[0]?.result || {
+    ok: false,
+    message: `요소를 찾지 못했습니다: ${selector}`
+  };
+}
+
 function isRetryableTabMessageError(error) {
   const message = String(error?.message || error || "");
   return (
@@ -1298,6 +1343,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             ok: true,
             message: "백그라운드에서 매크로 실행을 시작했습니다."
           });
+          return;
+        }
+
+        case "EXECUTE_MAIN_WORLD_CLICK": {
+          const tabId = sender?.tab?.id;
+          const frameId = sender?.frameId;
+          const selector = typeof message.selector === "string" ? message.selector.trim() : "";
+
+          if (!isFiniteTabId(tabId)) {
+            throw new Error("실행할 탭을 찾을 수 없습니다.");
+          }
+
+          if (!selector) {
+            throw new Error("클릭할 selector가 없습니다.");
+          }
+
+          const result = await executeMainWorldClick(tabId, frameId, selector);
+          sendResponse(result);
           return;
         }
 

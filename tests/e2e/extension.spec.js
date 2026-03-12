@@ -637,8 +637,8 @@ async function startFixtureServer() {
             <div id="result"></div>
           `,
           `
-            window.__sawSyntheticMouse = false;
             const button = document.querySelector("#set_apprv");
+            const nativeClick = HTMLInputElement.prototype.click;
 
             window.main = function(action) {
               const result = document.querySelector("#result");
@@ -647,17 +647,14 @@ async function startFixtureServer() {
                 return;
               }
 
-              result.textContent = window.__sawSyntheticMouse ? "closed" : "applied";
-              window.__sawSyntheticMouse = false;
+              result.textContent = window.__viaPageClickOverride ? "applied" : "closed";
+              window.__viaPageClickOverride = false;
             };
 
-            button.addEventListener("mousedown", () => {
-              window.__sawSyntheticMouse = true;
-            });
-
-            button.addEventListener("mouseup", () => {
-              window.__sawSyntheticMouse = true;
-            });
+            button.click = function() {
+              window.__viaPageClickOverride = true;
+              nativeClick.call(this);
+            };
           `
         )
       );
@@ -1368,7 +1365,7 @@ test.describe("extension smoke tests", () => {
       .toBe("결재라인지정");
   });
 
-  test("uses direct click for inline onclick buttons", async () => {
+  test("uses main-world direct click for inline onclick buttons", async () => {
     const runPage = await bundle.context.newPage();
     await runPage.goto(`${server.baseUrl}/inline-onclick-apply.html`);
 

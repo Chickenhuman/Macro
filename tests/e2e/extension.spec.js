@@ -605,6 +605,65 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/inline-onclick-apply.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Inline Onclick Apply",
+          `
+            <style>
+              .PUDD.PUDD-COLOR-blue.PUDD-UI-Button {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 80px;
+                height: 32px;
+                padding: 0 10px;
+                border: 1px solid #9aa4b2;
+                background: #fff;
+              }
+
+              #set_apprv {
+                width: 100%;
+                height: 100%;
+                border: 0;
+                background: transparent;
+                cursor: pointer;
+              }
+            </style>
+            <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+              <input id="set_apprv" type="button" value="반영" onclick="main('SET_APPRV');" />
+            </div>
+            <div id="result"></div>
+          `,
+          `
+            window.__sawSyntheticMouse = false;
+            const button = document.querySelector("#set_apprv");
+
+            window.main = function(action) {
+              const result = document.querySelector("#result");
+              if (action !== "SET_APPRV") {
+                result.textContent = "wrong-action";
+                return;
+              }
+
+              result.textContent = window.__sawSyntheticMouse ? "closed" : "applied";
+              window.__sawSyntheticMouse = false;
+            };
+
+            button.addEventListener("mousedown", () => {
+              window.__sawSyntheticMouse = true;
+            });
+
+            button.addEventListener("mouseup", () => {
+              window.__sawSyntheticMouse = true;
+            });
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/pudd-dropdown.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -1307,5 +1366,34 @@ test.describe("extension smoke tests", () => {
         return await runPage.textContent("#clickedLabel");
       })
       .toBe("결재라인지정");
+  });
+
+  test("uses direct click for inline onclick buttons", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/inline-onclick-apply.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const steps = [
+      {
+        type: "click",
+        selector: "#set_apprv",
+        label: "반영"
+      }
+    ];
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return await runPage.textContent("#result");
+      })
+      .toBe("applied");
   });
 });

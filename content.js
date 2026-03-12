@@ -1307,6 +1307,16 @@
     el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   }
 
+  function prefersDirectClick(el) {
+    if (!(el instanceof Element)) return false;
+
+    if (!el.matches("button, input[type='button'], input[type='submit'], input[type='reset']")) {
+      return false;
+    }
+
+    return el.hasAttribute("onclick");
+  }
+
   function isCheckboxLikeElement(el) {
     if (!(el instanceof Element)) return false;
 
@@ -1623,6 +1633,12 @@
     await delay(250);
 
     el.focus?.();
+
+    if (prefersDirectClick(el) && typeof el.click === "function") {
+      el.click();
+      return;
+    }
+
     fireMouseSequence(el);
   }
 

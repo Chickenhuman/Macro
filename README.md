@@ -180,6 +180,7 @@ popup.js
 - 같은 탭이 새 창 대신 새로고침/재이동으로 이어지는 흐름이면 그 현재 탭 완료도 `waitForPopup`로 이어서 처리합니다
 - popup 안 버튼이 부모창 새로고침/닫힘을 유발해도 가능한 한 부모 탭으로 복귀해 다음 step을 이어갑니다
 - 클릭 직후 팝업 닫힘 또는 탭 새로고침 때문에 메시지 채널이 먼저 닫혀도, 실제 전환이 감지되면 해당 click step은 계속 완료 처리합니다
+- 클릭 다음에 `wait`/`waitFor`가 이어지는 경우, 현재 탭 reload가 감지되면 그 reload 완료 뒤 다음 step으로 넘어가도록 안정화합니다
 
 ### 브라우저 기본 다이얼로그 관련
 - 사이트가 띄우는 브라우저 기본 `alert`/`confirm`은 DOM 클릭 step으로 기록되지 않습니다
@@ -244,6 +245,7 @@ popup.js
 - popup 닫힘 후 부모 탭 복귀 실행
 - click 직후 popup 닫힘/현재 탭 새로고침 복구
 - 현재 탭 새로고침 기반 `waitForPopup` 처리
+- 성공 응답 뒤 늦게 시작되는 현재 탭 reload 안정화
 - 실행 중 네이티브 `alert`/`confirm` 자동 수락
 
 `test:e2e`는 Playwright + Xvfb 기준입니다.

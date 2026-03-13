@@ -1310,6 +1310,213 @@ async function waitForClickStepRecovery(runState, originalTab, knownTabIdsAtWait
   };
 }
 
+function getPostClickNavigationObserveMs(nextStep) {
+  if (!nextStep || typeof nextStep !== "object") {
+    return 0;
+  }
+
+  if (nextStep.type === "wait") {
+    const waitMs = typeof nextStep.ms === "number" && nextStep.ms >= 0 ? nextStep.ms : 0;
+    return Math.min(2000, Math.max(400, waitMs));
+  }
+
+  if (nextStep.type === "waitFor" || nextStep.type === "waitForPopup") {
+    return 800;
+  }
+
+  return 0;
+}
+
+async function waitForSuccessfulClickNavigation(
+  runState,
+  originalTab,
+  knownTabIdsAtWaitStart,
+  observeTimeout = 1200,
+  settleTimeout = 10000
+) {
+  const startedAt = Date.now();
+  const originalUrl = String(originalTab?.url || "");
+
+  while (Date.now() - startedAt < observeTimeout) {
+    const latestRunState = await getRunState();
+
+    if (!latestRunState.running) {
+      return {
+        handled: true,
+        runState: latestRunState
+      };
+    }
+
+    if (latestRunState.stepIndex > runState.stepIndex) {
+      return {
+        handled: true,
+        runState: latestRunState
+      };
+    }
+
+    const stillHandlingSameStep =
+      latestRunState.currentTabId === runState.currentTabId &&
+      latestRunState.activeStepIndex === runState.stepIndex &&
+      latestRunState.activeStepType === runState.activeStepType &&
+      latestRunState.activeStepTabId === runState.currentTabId;
+
+    if (!stillHandlingSameStep) {
+      return {
+        handled: true,
+        runState: latestRunState
+      };
+    }
+
+    try {
+      const currentTab = await chrome.tabs.get(runState.currentTabId);
+      const currentUrl = String(currentTab?.url || "");
+      const pendingUrl = String(currentTab?.pendingUrl || "");
+      const navigated =
+        !!pendingUrl ||
+        currentTab?.status === "loading" ||
+        (originalUrl && currentUrl && currentUrl !== originalUrl);
+
+      if (!navigated) {
+        await delay(100);
+        continue;
+      }
+    } catch (error) {
+      if (isMissingTabError(error)) {
+        return {
+          handled: false,
+          runState: await getRunState()
+        };
+      }
+
+      throw error;
+    }
+
+    const settleStartedAt = Date.now();
+
+    while (Date.now() - settleStartedAt < settleTimeout) {
+      const latestAfterNavigation = await getRunState();
+
+      if (!latestAfterNavigation.running) {
+        return {
+          handled: true,
+          runState: latestAfterNavigation
+        };
+      }
+
+      if (latestAfterNavigation.stepIndex > runState.stepIndex) {
+        return {
+          handled: true,
+          runState: latestAfterNavigation
+        };
+      }
+
+      const stillHandlingAfterNavigation =
+        latestAfterNavigation.currentTabId === runState.currentTabId &&
+        latestAfterNavigation.activeStepIndex === runState.stepIndex &&
+        latestAfterNavigation.activeStepType === runState.activeStepType &&
+        latestAfterNavigation.activeStepTabId === runState.currentTabId;
+
+      if (!stillHandlingAfterNavigation) {
+        return {
+          handled: true,
+          runState: latestAfterNavigation
+        };
+      }
+
+      try {
+        const currentTab = await chrome.tabs.get(runState.currentTabId);
+        const pendingUrl = String(currentTab?.pendingUrl || "");
+        const loading = !!pendingUrl || currentTab?.status === "loading";
+
+        if (loading) {
+          await delay(150);
+          continue;
+        }
+
+        try {
+          await ensureContentReady(runState.currentTabId);
+        } catch (error) {
+          const message = String(error?.message || error || "");
+          if (
+            isRetryableTabMessageError(error) ||
+            message.includes("페이지와 연결하지 못했습니다")
+          ) {
+            await delay(150);
+            continue;
+          }
+          throw error;
+        }
+
+        const latestReadyRunState = await getRunState();
+
+        if (!latestReadyRunState.running) {
+          return {
+            handled: true,
+            runState: latestReadyRunState
+          };
+        }
+
+        if (latestReadyRunState.stepIndex > runState.stepIndex) {
+          return {
+            handled: true,
+            runState: latestReadyRunState
+          };
+        }
+
+        const stillHandlingReadyStep =
+          latestReadyRunState.currentTabId === runState.currentTabId &&
+          latestReadyRunState.activeStepIndex === runState.stepIndex &&
+          latestReadyRunState.activeStepType === runState.activeStepType &&
+          latestReadyRunState.activeStepTabId === runState.currentTabId;
+
+        if (!stillHandlingReadyStep) {
+          return {
+            handled: true,
+            runState: latestReadyRunState
+          };
+        }
+
+        const advancedRunState = await setRunState({
+          ...latestReadyRunState,
+          stepIndex: latestReadyRunState.stepIndex + 1,
+          lastMessage:
+            `${latestReadyRunState.stepIndex + 1} / ${latestReadyRunState.steps.length} step 완료 ` +
+            "(현재 탭 새로고침 완료)",
+          error: "",
+          knownTabIdsAtWaitStart,
+          activeStepIndex: -1,
+          activeStepType: "",
+          activeStepTabId: null
+        });
+
+        return {
+          handled: true,
+          runState: advancedRunState
+        };
+      } catch (error) {
+        if (isMissingTabError(error)) {
+          return {
+            handled: false,
+            runState: await getRunState()
+          };
+        }
+
+        throw error;
+      }
+    }
+
+    return {
+      handled: false,
+      runState: await getRunState()
+    };
+  }
+
+  return {
+    handled: false,
+    runState: await getRunState()
+  };
+}
+
 async function continueMacroRun(passedState) {
   let runState = passedState || (await getRunState());
 
@@ -1412,6 +1619,24 @@ async function continueMacroRun(passedState) {
 
       if (!response?.ok) {
         throw new Error(response?.message || "step 실행 실패");
+      }
+
+      const postClickNavigationObserveMs =
+        step.type === "click" ? getPostClickNavigationObserveMs(nextStep) : 0;
+      if (postClickNavigationObserveMs > 0) {
+        const navigation = await waitForSuccessfulClickNavigation(
+          runState,
+          tab,
+          knownTabIdsAtWaitStart,
+          postClickNavigationObserveMs
+        );
+        if (navigation.handled) {
+          runState = navigation.runState;
+          if (!runState.running) {
+            return;
+          }
+          continue;
+        }
       }
 
       const latestRunState = await getRunState();

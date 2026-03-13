@@ -439,6 +439,110 @@ test("continueMacroRun recovers when a click reloads the current tab before the 
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
 });
 
+test("continueMacroRun waits for a successful click-triggered reload before running the next wait and click", async () => {
+  const harness = loadBackgroundHarness();
+  let runSingleStepCalls = 0;
+
+  harness.tabs.set(1, {
+    id: 1,
+    url: "https://example.com/docCommonDraftView.do?multiViewYN=Y",
+    windowId: 10,
+    status: "complete"
+  });
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    const currentTab = harness.tabs.get(tabId);
+
+    if (message.type === "PING") {
+      if (currentTab?.status === "loading") {
+        throw new Error("Receiving end does not exist");
+      }
+
+      return {
+        ok: true
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+
+      if (message.index === 0) {
+        harness.tabs.set(tabId, {
+          ...currentTab,
+          status: "loading",
+          pendingUrl: currentTab.url
+        });
+
+        setTimeout(() => {
+          const reloadedTab = harness.tabs.get(tabId);
+          harness.tabs.set(tabId, {
+            ...reloadedTab,
+            status: "complete",
+            pendingUrl: ""
+          });
+        }, 2000);
+
+        return {
+          ok: true,
+          message: "[1] 클릭: 확인 완료"
+        };
+      }
+
+      return {
+        ok: true
+      };
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#btnConfirmD",
+        label: "확인"
+      },
+      {
+        type: "wait",
+        ms: 500
+      },
+      {
+        type: "click",
+        selector: "div.PUDD.PUDD-COLOR-blue.PUDD-UI-Button:nth-of-type(6) > input.psh_btn",
+        label: "결재"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 중",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(runSingleStepCalls, 3);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
 test("SAVE_MACRO stores and overwrites saved macros by name", async () => {
   const harness = loadBackgroundHarness();
   const listener = harness.registries.runtimeOnMessage.listeners[0];

@@ -11,6 +11,7 @@ This repository expects implementation work to follow the rules below unless the
 - Default verification target is `npm test`.
 - If `npm test` cannot run, run the broadest available subset such as `npm run test:unit` and explain the gap in the final response.
 - Do not skip testing just because the change looks small if runtime behavior could be affected.
+- When modifying existing logic, treat the work as regression-sensitive: prefer full verification over narrow spot checks, confirm adjacent flows still work, and add or strengthen regression tests when the risk is non-trivial.
 
 ## 3. Commit And Push By Default
 - After implementation and verification complete, create a git commit and push to `origin/main`.

@@ -61,6 +61,34 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/space-toggle.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Space Toggle",
+          `
+            <label id="spaceToggleLabel">
+              <input id="spaceToggle" type="checkbox" />
+              스페이스 토글
+            </label>
+            <div id="spaceState">off</div>
+          `,
+          `
+            const input = document.querySelector("#spaceToggle");
+            const state = document.querySelector("#spaceState");
+
+            function syncState() {
+              state.textContent = input.checked ? "on" : "off";
+            }
+
+            input.addEventListener("change", syncState);
+            syncState();
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/popup-root.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -1023,6 +1051,77 @@ test.describe("extension smoke tests", () => {
           step.value === "S3cret!"
       )
     ).toBe(true);
+  });
+
+  test("records and replays spacebar key steps without duplicating click steps", async () => {
+    const recordPage = await bundle.context.newPage();
+    await recordPage.goto(`${server.baseUrl}/space-toggle.html`);
+
+    const recordTabId = await findTabId(extensionPage, recordPage.url());
+    expect(recordTabId).toBeTruthy();
+
+    const startResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_RECORDING",
+      tabId: recordTabId
+    });
+    expect(startResponse.ok).toBe(true);
+
+    await recordPage.focus("#spaceToggle");
+    await recordPage.keyboard.press("Space");
+
+    await expect
+      .poll(async () => {
+        return await recordPage.textContent("#spaceState");
+      })
+      .toBe("on");
+
+    const stopResponse = await sendRuntimeMessage(extensionPage, {
+      type: "STOP_RECORDING"
+    });
+    expect(stopResponse.ok).toBe(true);
+
+    const storage = await readStorage(extensionPage);
+    const steps = storage.macroSteps || [];
+
+    expect(
+      steps.some(
+        (step) =>
+          step.type === "key" &&
+          step.selector === "#spaceToggleLabel" &&
+          step.key === " " &&
+          step.code === "Space"
+      )
+    ).toBe(true);
+    expect(
+      steps.some((step) => step.type === "click" && step.selector === "#spaceToggleLabel")
+    ).toBe(false);
+
+    await recordPage.close();
+
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/space-toggle.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return await runPage.textContent("#spaceState");
+      })
+      .toBe("on");
+
+    await expect
+      .poll(async () => {
+        return await runPage.isChecked("#spaceToggle");
+      })
+      .toBe(true);
   });
 
   test("records related popup tab actions and inserts waitForPopup", async () => {

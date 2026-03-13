@@ -31,6 +31,7 @@
 
 ### 기록
 - `click`
+- `key`
 - `input`
 - `select`
 - `dropdownSelect`
@@ -122,6 +123,7 @@ popup.js
 ```json
 [
   { "type": "click", "selector": "#btnSearch", "label": "조회" },
+  { "type": "key", "selector": "#agreeWrap", "label": "동의", "key": " ", "code": "Space" },
   { "type": "waitFor", "selector": ".result-row", "timeout": 10000, "interval": 200 },
   { "type": "click", "selector": ".result-row .open", "label": "문서 열기" },
   { "type": "waitForPopup", "urlIncludes": "detail", "timeout": 10000 }
@@ -133,6 +135,11 @@ popup.js
 #### `click`
 - 필드: `selector`, `label?`, `timeout?`
 - 일반 버튼/링크/체크박스/옵션 클릭에 사용
+
+#### `key`
+- 필드: `selector`, `key`, `code?`, `label?`, `timeout?`
+- 현재는 `Space` 키 기록/실행에 사용
+- 키보드로 체크박스나 포커스된 컨트롤을 조작해야 하는 흐름에 사용
 
 #### `input`
 - 필드: `selector`, `value`, `label?`, `timeout?`
@@ -175,6 +182,11 @@ popup.js
 - 대신 실행 중에는 관련 탭에서 자동 수락되도록 처리합니다
 - 그래서 `결재자가 한 명일 때는 자동으로 전결처리 됩니다.` 같은 안내창은 별도 step 없이 넘어갈 수 있습니다
 
+### 키보드 입력 관련
+- 현재 `Space` 키는 별도 `key` step으로 기록할 수 있습니다
+- `Space`로 인해 뒤따라오는 브라우저 기본 `click`은 중복 기록되지 않도록 막습니다
+- 일반 텍스트 입력은 계속 `input` step으로 저장됩니다
+
 ### 저장 안정성
 - 기록 직후 페이지 이동/리로드로 메시지 채널이 닫히는 경우를 대비해 직접 저장 fallback이 들어가 있습니다
 
@@ -189,7 +201,7 @@ popup.js
 5. `디버그 로그 복사`
 
 현재 디버그 로그에는 아래 정보가 들어갑니다.
-- `pointerdown`, `mousedown`, `mouseup`, `click`, `change`
+- `pointerdown`, `mousedown`, `mouseup`, `keydown`, `click`, `change`
 - `target`
 - `ancestors`
 - `clickable`
@@ -212,6 +224,7 @@ popup.js
 - 반복 실행
 - 실행 중지
 - 비밀번호 입력 기록
+- 스페이스바 키 기록/실행
 - 팝업 기록/실행
 - PUDD 체크박스/버튼
 - 드롭다운 선택

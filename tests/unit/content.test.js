@@ -207,3 +207,25 @@ test("persistRecordedSteps avoids direct storage fallback when runtime append su
 
   assert.equal(harness.storage.macroSteps, undefined);
 });
+
+test("persistRecordedSteps preserves key step metadata during storage fallback", async () => {
+  const step = {
+    type: "key",
+    selector: "#spaceToggleLabel",
+    label: "스페이스 토글",
+    key: " ",
+    code: "Space"
+  };
+
+  const harness = loadContentHarness({
+    sendMessageImpl: async () => {
+      throw new Error(
+        "A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received"
+      );
+    }
+  });
+
+  await harness.hooks.persistRecordedSteps([step]);
+
+  assert.deepEqual(normalize(harness.storage.macroSteps), [step]);
+});

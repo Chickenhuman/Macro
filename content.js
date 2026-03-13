@@ -11,6 +11,7 @@
   let overlayTitle = null;
   let overlayBody = null;
   let pendingDropdownRecord = null;
+  let pendingKeyClickSuppression = null;
   const STEPS_KEY = "macroSteps";
 
   function delay(ms) {
@@ -711,11 +712,25 @@
     overlayBody.textContent = body;
   }
 
+  function getRecordedKeyName(step) {
+    if (step?.code === "Space" || step?.key === " " || step?.key === "Spacebar") {
+      return "스페이스바";
+    }
+
+    const normalized = String(step?.key || step?.code || "").trim();
+    return normalized || "알 수 없는 키";
+  }
+
   function showRecordedMessage(step) {
     if (!step) return;
 
     if (step.type === "click") {
       setOverlay("매크로 기록 중", `클릭 기록: ${step.label || step.selector}`);
+    } else if (step.type === "key") {
+      setOverlay(
+        "매크로 기록 중",
+        `키 입력 기록: ${step.label || step.selector} (${getRecordedKeyName(step)})`
+      );
     } else if (step.type === "input") {
       setOverlay("매크로 기록 중", `입력 기록: ${step.label || step.selector}`);
     } else if (step.type === "select") {
@@ -748,6 +763,8 @@
     if (typeof step.selector === "string") clean.selector = step.selector;
     if (typeof step.value === "string") clean.value = step.value;
     if (typeof step.label === "string") clean.label = step.label;
+    if (typeof step.key === "string") clean.key = step.key;
+    if (typeof step.code === "string") clean.code = step.code;
     if (typeof step.timeout === "number") clean.timeout = step.timeout;
     if (typeof step.interval === "number") clean.interval = step.interval;
     if (typeof step.ms === "number") clean.ms = step.ms;
@@ -858,6 +875,9 @@
 
     if (step.type === "click") {
       return `click ${step.selector || ""}`.trim();
+    }
+    if (step.type === "key") {
+      return `key ${step.selector || ""} ${getRecordedKeyName(step)}`.trim();
     }
     if (step.type === "input" || step.type === "select" || step.type === "dropdownSelect") {
       return `${step.type} ${step.selector || ""} ${String(step.value ?? "")}`.trim();
@@ -1034,6 +1054,117 @@
     return el;
   }
 
+  function isTextEntryTarget(el) {
+    if (!(el instanceof Element)) return false;
+
+    if (el instanceof HTMLTextAreaElement) {
+      return true;
+    }
+
+    if (el instanceof HTMLInputElement) {
+      const type = (el.getAttribute("type") || "text").toLowerCase();
+      return ![
+        "button",
+        "submit",
+        "reset",
+        "checkbox",
+        "radio",
+        "range",
+        "color",
+        "file",
+        "hidden",
+        "image"
+      ].includes(type);
+    }
+
+    return !!el.isContentEditable;
+  }
+
+  function getKeyboardTarget(rawTarget) {
+    if (!(rawTarget instanceof Element)) return null;
+
+    if (isTextEntryTarget(rawTarget)) {
+      return null;
+    }
+
+    const clickableTarget = getClickableTarget(rawTarget);
+    if (clickableTarget && !isTextEntryTarget(clickableTarget)) {
+      return clickableTarget;
+    }
+
+    const dropdownTarget = getDropdownTriggerTarget(rawTarget);
+    if (dropdownTarget && !isTextEntryTarget(dropdownTarget)) {
+      return dropdownTarget;
+    }
+
+    const focusable = rawTarget.closest(
+      "button, a, input, select, textarea, [tabindex], [contenteditable='true'], [role='button'], [role='checkbox'], [role='radio'], [role='menuitem'], [role='option']"
+    );
+    if (focusable && !isTextEntryTarget(focusable)) {
+      return focusable;
+    }
+
+    return rawTarget;
+  }
+
+  function isSpacebarEvent(event) {
+    if (!event) return false;
+
+    return (
+      event.code === "Space" ||
+      event.key === " " ||
+      event.key === "Spacebar" ||
+      String(event.key || "").toLowerCase() === "space"
+    );
+  }
+
+  function shouldRecordSpacebarEvent(event) {
+    if (!recordMode || !isSpacebarEvent(event)) {
+      return false;
+    }
+
+    if (event.repeat) return false;
+    if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function rememberKeyClickSuppression(selector) {
+    if (!selector) return;
+
+    pendingKeyClickSuppression = {
+      selector,
+      expiresAt: Date.now() + 800
+    };
+  }
+
+  function shouldSuppressKeyTriggeredClick(rawTarget, event) {
+    if (!pendingKeyClickSuppression) {
+      return false;
+    }
+
+    if (Date.now() > pendingKeyClickSuppression.expiresAt) {
+      pendingKeyClickSuppression = null;
+      return false;
+    }
+
+    if (event?.detail > 0) {
+      return false;
+    }
+
+    const target =
+      findCheckboxLikeWrapper(rawTarget) || getClickableTarget(rawTarget) || getKeyboardTarget(rawTarget);
+    const selector = safeBuildSelector(target);
+    if (!selector || selector !== pendingKeyClickSuppression.selector) {
+      return false;
+    }
+
+    pendingKeyClickSuppression = null;
+    return true;
+  }
+
   document.addEventListener(
     "pointerdown",
     (event) => {
@@ -1062,11 +1193,53 @@
   );
 
   document.addEventListener(
+    "keydown",
+    async (event) => {
+      if (!recordMode) return;
+
+      logDebugEvent("keydown", event.target, {
+        note: `${event.code || ""} ${getRecordedKeyName(event)}`.trim()
+      });
+
+      if (!shouldRecordSpacebarEvent(event)) {
+        return;
+      }
+
+      const target = getKeyboardTarget(event.target);
+      if (!target) return;
+
+      const selector = buildSelector(target);
+      if (!selector) return;
+
+      rememberKeyClickSuppression(selector);
+      try {
+        await recordAction({
+          type: "key",
+          selector,
+          key: " ",
+          code: "Space",
+          label: getHumanLabel(target)
+        });
+      } catch (error) {
+        if (pendingKeyClickSuppression?.selector === selector) {
+          pendingKeyClickSuppression = null;
+        }
+        throw error;
+      }
+    },
+    true
+  );
+
+  document.addEventListener(
     "click",
     async (event) => {
       if (!recordMode) return;
 
       logDebugEvent("click", event.target);
+
+      if (shouldSuppressKeyTriggeredClick(event.target, event)) {
+        return;
+      }
 
       const checkboxWrapper = findCheckboxLikeWrapper(event.target);
       if (checkboxWrapper) {
@@ -1416,6 +1589,54 @@
     throw new Error(`체크박스를 클릭하지 못했습니다: ${step.selector}`);
   }
 
+  function getKeyboardExecutionTarget(el) {
+    if (!(el instanceof Element)) return null;
+
+    const checkboxTarget = getCheckboxExecutionTarget(el);
+    if (checkboxTarget?.input) {
+      return checkboxTarget.input;
+    }
+
+    return resolveVisibleClickTarget(el) || el;
+  }
+
+  function createKeyboardEvent(type, step) {
+    const key = step?.key === " " || step?.code === "Space" ? " " : String(step?.key || "");
+    const code = step?.code || (key === " " ? "Space" : "");
+    const keyCode = code === "Space" ? 32 : 0;
+
+    return new KeyboardEvent(type, {
+      key,
+      code,
+      keyCode,
+      charCode: type === "keypress" ? keyCode : 0,
+      which: keyCode,
+      bubbles: true,
+      cancelable: true,
+      composed: true
+    });
+  }
+
+  function dispatchKeySequence(el, step) {
+    const keydownAllowed = el.dispatchEvent(createKeyboardEvent("keydown", step));
+    const keypressAllowed = el.dispatchEvent(createKeyboardEvent("keypress", step));
+    const keyupAllowed = el.dispatchEvent(createKeyboardEvent("keyup", step));
+
+    return {
+      keydownAllowed,
+      keypressAllowed,
+      keyupAllowed
+    };
+  }
+
+  function isNativeSpaceActivatableElement(el) {
+    if (!(el instanceof Element)) return false;
+
+    return el.matches(
+      "button, summary, input[type='button'], input[type='submit'], input[type='reset'], input[type='checkbox'], input[type='radio']"
+    );
+  }
+
   function setInputValue(el, value) {
     const proto =
       el.tagName === "TEXTAREA"
@@ -1667,6 +1888,58 @@
     fireMouseSequence(el);
   }
 
+  async function doKey(step) {
+    const raw = await waitForElement(step.selector, step.timeout || 10000, 200);
+    const visibleTarget = resolveVisibleClickTarget(raw) || raw;
+    if (!visibleTarget || !isVisible(visibleTarget)) {
+      throw new Error(`요소가 보이지 않습니다: ${step.selector}`);
+    }
+
+    const focusTarget = getKeyboardExecutionTarget(raw);
+    if (!focusTarget) {
+      throw new Error(`키 입력 대상을 찾지 못했습니다: ${step.selector}`);
+    }
+
+    const checkboxTarget = getCheckboxExecutionTarget(raw);
+    const beforeChecked =
+      checkboxTarget?.input && "checked" in checkboxTarget.input ? !!checkboxTarget.input.checked : null;
+
+    visibleTarget.scrollIntoView({
+      block: "center",
+      inline: "center"
+    });
+
+    await delay(250);
+    focusTarget.focus?.();
+
+    const result = dispatchKeySequence(focusTarget, step);
+
+    if (beforeChecked !== null && checkboxTarget?.input) {
+      await delay(120);
+      if (!!checkboxTarget.input.checked !== beforeChecked) {
+        return;
+      }
+    }
+
+    if (
+      isSpacebarEvent(step) &&
+      result.keydownAllowed &&
+      result.keypressAllowed &&
+      result.keyupAllowed &&
+      isNativeSpaceActivatableElement(focusTarget)
+    ) {
+      if (checkboxTarget?.wrapper) {
+        await clickCheckboxLike(raw, step);
+        return;
+      }
+
+      if (typeof focusTarget.click === "function") {
+        focusTarget.click();
+        await delay(120);
+      }
+    }
+  }
+
   async function doInput(step) {
     const el = await ensureVisible(step.selector, step.timeout || 10000);
 
@@ -1709,6 +1982,8 @@
     switch (step.type) {
       case "click":
         return `[${n}] 클릭: ${step.label || step.selector}`;
+      case "key":
+        return `[${n}] 키 입력: ${step.label || step.selector} (${getRecordedKeyName(step)})`;
       case "input":
         return `[${n}] 입력: ${step.label || step.selector}`;
       case "select":
@@ -1734,6 +2009,8 @@
 
     if (step.type === "click") {
       await doClick(step);
+    } else if (step.type === "key") {
+      await doKey(step);
     } else if (step.type === "input") {
       await doInput(step);
     } else if (step.type === "select") {
@@ -1764,6 +2041,7 @@
           recordMode = true;
           lastRecordedAt = null;
           pendingDropdownRecord = null;
+          pendingKeyClickSuppression = null;
           setOverlay("매크로 기록 중", "페이지에서 버튼을 클릭하거나 값을 입력하세요.");
           sendResponse({ ok: true });
           return;
@@ -1777,6 +2055,7 @@
           debugMode = false;
           lastRecordedAt = null;
           pendingDropdownRecord = null;
+          pendingKeyClickSuppression = null;
           removeOverlay();
           sendResponse({ ok: true });
           return;

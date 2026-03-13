@@ -392,9 +392,16 @@ function isRestrictedUrl(url) {
 function describeStep(step) {
   if (!step) return "알 수 없는 step";
 
+  const keyName =
+    step.code === "Space" || step.key === " " || step.key === "Spacebar"
+      ? "스페이스바"
+      : step.key || step.code || "알 수 없는 키";
+
   switch (step.type) {
     case "click":
       return `클릭: ${step.label || step.selector || "(selector 없음)"}`;
+    case "key":
+      return `키 입력: ${step.label || step.selector || "(selector 없음)"} → ${keyName}`;
     case "input":
       return `입력: ${step.label || step.selector || "(selector 없음)"} → ${JSON.stringify(step.value ?? "")}`;
     case "select":
@@ -488,6 +495,14 @@ function getEditableFields(step) {
     case "waitForPopup":
       return [
         { key: "urlIncludes", label: "URL 포함 문자열", type: "text" },
+        { key: "timeout", label: "최대 대기(ms)", type: "number", min: 0 }
+      ];
+    case "key":
+      return [
+        { key: "label", label: "표시 이름", type: "text" },
+        { key: "selector", label: "셀렉터", type: "text" },
+        { key: "key", label: "키 값", type: "text" },
+        { key: "code", label: "키 코드", type: "text" },
         { key: "timeout", label: "최대 대기(ms)", type: "number", min: 0 }
       ];
     case "input":

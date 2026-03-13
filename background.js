@@ -494,6 +494,8 @@ function sanitizeStep(step) {
   if (typeof step.selector === "string") clean.selector = step.selector;
   if (typeof step.value === "string") clean.value = step.value;
   if (typeof step.label === "string") clean.label = step.label;
+  if (typeof step.key === "string") clean.key = step.key;
+  if (typeof step.code === "string") clean.code = step.code;
   if (typeof step.timeout === "number") clean.timeout = step.timeout;
   if (typeof step.interval === "number") clean.interval = step.interval;
   if (typeof step.ms === "number") clean.ms = step.ms;

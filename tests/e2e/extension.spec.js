@@ -1176,6 +1176,50 @@ test.describe("extension smoke tests", () => {
       .toBe(true);
   });
 
+  test("replays legacy key steps without explicit key metadata as Space", async () => {
+    const setResponse = await sendRuntimeMessage(extensionPage, {
+      type: "SET_STEPS",
+      steps: [
+        {
+          type: "key",
+          selector: "#spaceToggleLabel",
+          label: "스페이스 토글"
+        }
+      ]
+    });
+    expect(setResponse.ok).toBe(true);
+
+    const storage = await readStorage(extensionPage);
+    expect(storage.macroSteps || []).toEqual([
+      {
+        type: "key",
+        selector: "#spaceToggleLabel",
+        label: "스페이스 토글",
+        key: " ",
+        code: "Space"
+      }
+    ]);
+
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/space-toggle.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps: storage.macroSteps || []
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return await runPage.textContent("#spaceState");
+      })
+      .toBe("on");
+  });
+
   test("does not record a key step when spacebar is pressed on the page body", async () => {
     const page = await bundle.context.newPage();
     await page.goto(`${server.baseUrl}/space-idle.html`);

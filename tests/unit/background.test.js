@@ -334,6 +334,33 @@ test("SAVE_MACRO stores and overwrites saved macros by name", async () => {
   ]);
 });
 
+test("SET_STEPS defaults key steps without key metadata to Space", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  const response = await dispatchRuntimeMessage(listener, {
+    type: "SET_STEPS",
+    steps: [
+      {
+        type: "key",
+        selector: "#btnConfirmD",
+        label: "확인"
+      }
+    ]
+  });
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(normalize(harness.storage.macroSteps), [
+    {
+      type: "key",
+      selector: "#btnConfirmD",
+      label: "확인",
+      key: " ",
+      code: "Space"
+    }
+  ]);
+});
+
 test("continueMacroRun repeats the full macro for the requested repeat count", async () => {
   const harness = loadBackgroundHarness();
   let runSingleStepCalls = 0;

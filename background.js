@@ -501,6 +501,11 @@ function sanitizeStep(step) {
   if (typeof step.ms === "number") clean.ms = step.ms;
   if (typeof step.urlIncludes === "string") clean.urlIncludes = step.urlIncludes;
 
+  if (clean.type === "key" && !clean.key && !clean.code) {
+    clean.key = " ";
+    clean.code = "Space";
+  }
+
   return clean;
 }
 

@@ -393,7 +393,7 @@ function describeStep(step) {
   if (!step) return "알 수 없는 step";
 
   const keyName =
-    step.code === "Space" || step.key === " " || step.key === "Spacebar"
+    step.type === "key" || step.code === "Space" || step.key === " " || step.key === "Spacebar"
       ? "스페이스바"
       : step.key || step.code || "알 수 없는 키";
 

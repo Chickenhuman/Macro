@@ -713,7 +713,12 @@
   }
 
   function getRecordedKeyName(step) {
-    if (step?.code === "Space" || step?.key === " " || step?.key === "Spacebar") {
+    if (
+      step?.type === "key" ||
+      step?.code === "Space" ||
+      step?.key === " " ||
+      step?.key === "Spacebar"
+    ) {
       return "스페이스바";
     }
 
@@ -1618,7 +1623,10 @@
   }
 
   function createKeyboardEvent(type, step) {
-    const key = step?.key === " " || step?.code === "Space" ? " " : String(step?.key || "");
+    const key =
+      step?.type === "key" || step?.key === " " || step?.code === "Space"
+        ? " "
+        : String(step?.key || "");
     const code = step?.code || (key === " " ? "Space" : "");
     const keyCode = code === "Space" ? 32 : 0;
 

@@ -140,6 +140,7 @@ popup.js
 - 필드: `selector`, `key`, `code?`, `label?`, `timeout?`
 - 현재는 `Space` 키 기록/실행에 사용
 - 키보드로 체크박스나 포커스된 컨트롤을 조작해야 하는 흐름에 사용
+- 기존 매크로나 수동 JSON에 `key`/`code`가 빠져 있어도 현재는 `Space`로 보정해 실행합니다
 
 #### `input`
 - 필드: `selector`, `value`, `label?`, `timeout?`

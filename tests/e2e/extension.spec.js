@@ -1914,4 +1914,79 @@ test.describe("extension smoke tests", () => {
         }
       ]);
   });
+
+  test("reorders steps by dragging in the popup UI", async () => {
+    const steps = [
+      {
+        type: "click",
+        selector: "#firstBtn",
+        label: "첫 단계"
+      },
+      {
+        type: "wait",
+        ms: 1000
+      },
+      {
+        type: "click",
+        selector: "#secondBtn",
+        label: "둘째 단계"
+      }
+    ];
+
+    const setResponse = await sendRuntimeMessage(extensionPage, {
+      type: "SET_STEPS",
+      steps
+    });
+    expect(setResponse.ok).toBe(true);
+
+    await expect(extensionPage.locator("#stepsList .step-item").first()).toContainText("첫 단계");
+
+    await extensionPage.dragAndDrop(
+      "#stepsList .step-item:nth-child(1) [data-step-drag-handle='true']",
+      "#stepsList .step-item:nth-child(3)"
+    );
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return (storage.macroSteps || []).map((step) => step.label || step.type);
+      })
+      .toEqual(["wait", "둘째 단계", "첫 단계"]);
+  });
+
+  test("keeps wait-step editing open across popup auto-refresh", async () => {
+    const setResponse = await sendRuntimeMessage(extensionPage, {
+      type: "SET_STEPS",
+      steps: [
+        {
+          type: "wait",
+          ms: 1000
+        }
+      ]
+    });
+    expect(setResponse.ok).toBe(true);
+
+    const stepItem = extensionPage.locator("#stepsList .step-item").first();
+    await stepItem.getByRole("button", { name: "수정" }).click();
+
+    const msInput = extensionPage.locator('[data-field="ms"]').first();
+    await expect(msInput).toBeVisible();
+    await msInput.fill("2500");
+    await expect(msInput).toBeFocused();
+
+    await extensionPage.waitForTimeout(1700);
+
+    await expect(msInput).toBeVisible();
+    await expect(msInput).toHaveValue("2500");
+    await expect(msInput).toBeFocused();
+
+    await stepItem.getByRole("button", { name: "저장" }).click();
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return storage.macroSteps?.[0]?.ms || 0;
+      })
+      .toBe(2500);
+  });
 });

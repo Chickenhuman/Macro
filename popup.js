@@ -62,6 +62,7 @@ let currentData = {
 
 let editingStepIndex = null;
 let loadDataPromise = null;
+let draggingStepIndex = null;
 
 function setResult(text) {
   resultBox.textContent = text;
@@ -478,6 +479,67 @@ function cloneStep(step) {
   return JSON.parse(JSON.stringify(step || {}));
 }
 
+function reorderSteps(steps, fromIndex, toIndex) {
+  if (!Array.isArray(steps)) return [];
+  if (fromIndex === toIndex) return [...steps];
+  if (fromIndex < 0 || fromIndex >= steps.length) return [...steps];
+  if (toIndex < 0 || toIndex >= steps.length) return [...steps];
+
+  const next = [...steps];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+function remapEditingIndexAfterMove(currentIndex, fromIndex, toIndex) {
+  if (typeof currentIndex !== "number") {
+    return currentIndex;
+  }
+
+  if (currentIndex === fromIndex) {
+    return toIndex;
+  }
+
+  if (fromIndex < toIndex && currentIndex > fromIndex && currentIndex <= toIndex) {
+    return currentIndex - 1;
+  }
+
+  if (fromIndex > toIndex && currentIndex >= toIndex && currentIndex < fromIndex) {
+    return currentIndex + 1;
+  }
+
+  return currentIndex;
+}
+
+async function moveStep(fromIndex, toIndex) {
+  const steps = Array.isArray(currentData.steps) ? currentData.steps : [];
+  if (!steps.length || fromIndex === toIndex) {
+    return;
+  }
+
+  const next = reorderSteps(steps, fromIndex, toIndex);
+  if (JSON.stringify(next) === JSON.stringify(steps)) {
+    return;
+  }
+
+  editingStepIndex = remapEditingIndexAfterMove(editingStepIndex, fromIndex, toIndex);
+  await setSteps(next);
+  setResult(`${fromIndex + 1}번 step을 ${toIndex + 1}번 위치로 이동했습니다.`);
+}
+
+function shouldPauseAutoRefresh() {
+  if (draggingStepIndex !== null || typeof editingStepIndex === "number") {
+    return true;
+  }
+
+  const active = document.activeElement;
+  if (!active || active === document.body) {
+    return false;
+  }
+
+  return active === jsonEditor || !!active.closest?.(".step-editor");
+}
+
 function getEditableFields(step) {
   if (!step || !step.type) return [];
 
@@ -624,6 +686,7 @@ function renderStepEditor(item, step, index, steps) {
 
 function renderSteps() {
   const steps = Array.isArray(currentData.steps) ? currentData.steps : [];
+  const dragEnabled = !(currentData.run?.running || currentData.recording?.enabled);
 
   stepsMeta.textContent = `${steps.length}개`;
 
@@ -643,10 +706,83 @@ function renderSteps() {
   steps.forEach((step, index) => {
     const item = document.createElement("div");
     item.className = "step-item";
+    item.setAttribute("data-step-index", String(index));
+
+    item.addEventListener("dragover", (event) => {
+      if (!dragEnabled || draggingStepIndex === null || draggingStepIndex === index) {
+        return;
+      }
+
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      item.classList.add("drag-over");
+    });
+
+    item.addEventListener("dragleave", (event) => {
+      const related = event.relatedTarget;
+      if (related instanceof Node && item.contains(related)) {
+        return;
+      }
+
+      item.classList.remove("drag-over");
+    });
+
+    item.addEventListener("drop", async (event) => {
+      if (!dragEnabled || draggingStepIndex === null || draggingStepIndex === index) {
+        item.classList.remove("drag-over");
+        return;
+      }
+
+      event.preventDefault();
+      item.classList.remove("drag-over");
+
+      const fromIndex = draggingStepIndex;
+      draggingStepIndex = null;
+      try {
+        await moveStep(fromIndex, index);
+      } catch (error) {
+        await handleUiError(error, "popup:dragReorder");
+      }
+    });
+
+    const head = document.createElement("div");
+    head.className = "step-head";
+
+    const dragHandle = document.createElement("button");
+    dragHandle.type = "button";
+    dragHandle.className = "step-drag-handle";
+    dragHandle.textContent = "드래그";
+    dragHandle.draggable = dragEnabled;
+    dragHandle.disabled = !dragEnabled;
+    dragHandle.setAttribute("data-step-drag-handle", "true");
+
+    dragHandle.addEventListener("dragstart", (event) => {
+      if (!dragEnabled) {
+        event.preventDefault();
+        return;
+      }
+
+      draggingStepIndex = index;
+      item.classList.add("dragging");
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", String(index));
+      }
+    });
+
+    dragHandle.addEventListener("dragend", () => {
+      draggingStepIndex = null;
+      document.querySelectorAll(".step-item.dragging, .step-item.drag-over").forEach((node) => {
+        node.classList.remove("dragging", "drag-over");
+      });
+    });
 
     const main = document.createElement("div");
     main.className = "step-main";
     main.textContent = `${index + 1}. ${describeStep(step)}`;
+
+    head.appendChild(dragHandle);
+    head.appendChild(main);
 
     const actions = document.createElement("div");
     actions.className = "step-actions";
@@ -655,18 +791,14 @@ function renderSteps() {
     upBtn.textContent = "위로";
     upBtn.disabled = index === 0;
     upBtn.addEventListener("click", async () => {
-      const next = [...steps];
-      [next[index - 1], next[index]] = [next[index], next[index - 1]];
-      await setSteps(next);
+      await moveStep(index, index - 1);
     });
 
     const downBtn = document.createElement("button");
     downBtn.textContent = "아래로";
     downBtn.disabled = index === steps.length - 1;
     downBtn.addEventListener("click", async () => {
-      const next = [...steps];
-      [next[index + 1], next[index]] = [next[index], next[index + 1]];
-      await setSteps(next);
+      await moveStep(index, index + 1);
     });
 
     const deleteBtn = document.createElement("button");
@@ -693,7 +825,7 @@ function renderSteps() {
     actions.appendChild(editBtn);
     actions.appendChild(deleteBtn);
 
-    item.appendChild(main);
+    item.appendChild(head);
     item.appendChild(actions);
     renderStepEditor(item, step, index, steps);
     stepsList.appendChild(item);
@@ -1174,6 +1306,10 @@ loadData().catch((error) => {
 });
 
 setInterval(() => {
+  if (shouldPauseAutoRefresh()) {
+    return;
+  }
+
   loadData().catch(() => {
     // ignore
   });

@@ -89,6 +89,22 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/space-idle.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Space Idle",
+          `
+            <div id="idleState">idle</div>
+          `,
+          `
+            document.body.tabIndex = 0;
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/popup-root.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -1053,6 +1069,42 @@ test.describe("extension smoke tests", () => {
     ).toBe(true);
   });
 
+  test("does not record a key step while typing spaces into text inputs", async () => {
+    const page = await bundle.context.newPage();
+    await page.goto(`${server.baseUrl}/record-nav.html`);
+
+    const tabId = await findTabId(extensionPage, page.url());
+    expect(tabId).toBeTruthy();
+
+    const startResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_RECORDING",
+      tabId
+    });
+    expect(startResponse.ok).toBe(true);
+
+    await page.focus("#nameInput");
+    await page.keyboard.type("macro test");
+    await page.locator("#nameInput").blur();
+
+    const stopResponse = await sendRuntimeMessage(extensionPage, {
+      type: "STOP_RECORDING"
+    });
+    expect(stopResponse.ok).toBe(true);
+
+    const storage = await readStorage(extensionPage);
+    const steps = storage.macroSteps || [];
+
+    expect(
+      steps.some(
+        (step) =>
+          step.type === "input" &&
+          step.selector === "#nameInput" &&
+          step.value === "macro test"
+      )
+    ).toBe(true);
+    expect(steps.some((step) => step.type === "key")).toBe(false);
+  });
+
   test("records and replays spacebar key steps without duplicating click steps", async () => {
     const recordPage = await bundle.context.newPage();
     await recordPage.goto(`${server.baseUrl}/space-toggle.html`);
@@ -1122,6 +1174,33 @@ test.describe("extension smoke tests", () => {
         return await runPage.isChecked("#spaceToggle");
       })
       .toBe(true);
+  });
+
+  test("does not record a key step when spacebar is pressed on the page body", async () => {
+    const page = await bundle.context.newPage();
+    await page.goto(`${server.baseUrl}/space-idle.html`);
+
+    const tabId = await findTabId(extensionPage, page.url());
+    expect(tabId).toBeTruthy();
+
+    const startResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_RECORDING",
+      tabId
+    });
+    expect(startResponse.ok).toBe(true);
+
+    await page.focus("body");
+    await page.keyboard.press("Space");
+
+    const stopResponse = await sendRuntimeMessage(extensionPage, {
+      type: "STOP_RECORDING"
+    });
+    expect(stopResponse.ok).toBe(true);
+
+    const storage = await readStorage(extensionPage);
+    const steps = storage.macroSteps || [];
+
+    expect(steps.some((step) => step.type === "key")).toBe(false);
   });
 
   test("records related popup tab actions and inserts waitForPopup", async () => {
@@ -1472,6 +1551,15 @@ test.describe("extension smoke tests", () => {
       type: "STOP_RECORDING"
     });
     expect(stopResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return (storage.macroSteps || []).some(
+          (step) => step.type === "click" && step.selector === "#archiveOption"
+        );
+      })
+      .toBe(true);
 
     const storage = await readStorage(extensionPage);
     const steps = storage.macroSteps || [];

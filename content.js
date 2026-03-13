@@ -1080,6 +1080,23 @@
     return !!el.isContentEditable;
   }
 
+  function isKeyboardActionCandidate(el) {
+    if (!(el instanceof Element)) return false;
+    if (isTextEntryTarget(el)) return false;
+
+    if (findCheckboxLikeWrapper(el)) {
+      return true;
+    }
+
+    if (isButtonLikeElement(el) || isDropdownLikeElement(el)) {
+      return true;
+    }
+
+    return el.matches(
+      "summary, [role='button'], [role='checkbox'], [role='radio'], [role='menuitem'], [role='option']"
+    );
+  }
+
   function getKeyboardTarget(rawTarget) {
     if (!(rawTarget instanceof Element)) return null;
 
@@ -1088,23 +1105,23 @@
     }
 
     const clickableTarget = getClickableTarget(rawTarget);
-    if (clickableTarget && !isTextEntryTarget(clickableTarget)) {
+    if (isKeyboardActionCandidate(clickableTarget)) {
       return clickableTarget;
     }
 
     const dropdownTarget = getDropdownTriggerTarget(rawTarget);
-    if (dropdownTarget && !isTextEntryTarget(dropdownTarget)) {
+    if (isKeyboardActionCandidate(dropdownTarget)) {
       return dropdownTarget;
     }
 
     const focusable = rawTarget.closest(
-      "button, a, input, select, textarea, [tabindex], [contenteditable='true'], [role='button'], [role='checkbox'], [role='radio'], [role='menuitem'], [role='option']"
+      "button, a, input, select, textarea, summary, [tabindex], [contenteditable='true'], [role='button'], [role='checkbox'], [role='radio'], [role='menuitem'], [role='option']"
     );
-    if (focusable && !isTextEntryTarget(focusable)) {
+    if (isKeyboardActionCandidate(focusable)) {
       return focusable;
     }
 
-    return rawTarget;
+    return isKeyboardActionCandidate(rawTarget) ? rawTarget : null;
   }
 
   function isSpacebarEvent(event) {

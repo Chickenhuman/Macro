@@ -361,6 +361,35 @@ test("SET_STEPS defaults key steps without key metadata to Space", async () => {
   ]);
 });
 
+test("GET_DATA backfills legacy key steps without key metadata", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  harness.storage.macroSteps = [
+    {
+      type: "key",
+      selector: "#btnConfirmD",
+      label: "확인"
+    }
+  ];
+
+  const response = await dispatchRuntimeMessage(listener, {
+    type: "GET_DATA"
+  });
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(normalize(response.steps), [
+    {
+      type: "key",
+      selector: "#btnConfirmD",
+      label: "확인",
+      key: " ",
+      code: "Space"
+    }
+  ]);
+  assert.deepEqual(normalize(harness.storage.macroSteps), normalize(response.steps));
+});
+
 test("continueMacroRun repeats the full macro for the requested repeat count", async () => {
   const harness = loadBackgroundHarness();
   let runSingleStepCalls = 0;

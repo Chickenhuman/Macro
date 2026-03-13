@@ -146,7 +146,14 @@ function collectDescendantTabs(rootTabId, tabs) {
 
 async function getSteps() {
   const data = await chrome.storage.local.get(STEPS_KEY);
-  return Array.isArray(data[STEPS_KEY]) ? data[STEPS_KEY] : [];
+  const rawSteps = Array.isArray(data[STEPS_KEY]) ? data[STEPS_KEY] : [];
+  const sanitized = rawSteps.map(sanitizeStep).filter(Boolean);
+
+  if (JSON.stringify(rawSteps) !== JSON.stringify(sanitized)) {
+    await setSteps(sanitized);
+  }
+
+  return sanitized;
 }
 
 function createSavedMacroId() {

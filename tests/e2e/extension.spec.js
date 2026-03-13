@@ -1220,6 +1220,36 @@ test.describe("extension smoke tests", () => {
       .toBe("on");
   });
 
+  test("loads legacy key steps as Space in the popup UI", async () => {
+    await extensionPage.evaluate(async () => {
+      await chrome.storage.local.set({
+        macroSteps: [
+          {
+            type: "key",
+            selector: "#spaceToggleLabel",
+            label: "스페이스 토글"
+          }
+        ]
+      });
+    });
+
+    await extensionPage.reload();
+    await extensionPage.waitForLoadState("domcontentloaded");
+
+    await expect(extensionPage.locator("#stepsList .step-main").first()).toContainText("스페이스바");
+
+    const storage = await readStorage(extensionPage);
+    expect(storage.macroSteps || []).toEqual([
+      {
+        type: "key",
+        selector: "#spaceToggleLabel",
+        label: "스페이스 토글",
+        key: " ",
+        code: "Space"
+      }
+    ]);
+  });
+
   test("does not record a key step when spacebar is pressed on the page body", async () => {
     const page = await bundle.context.newPage();
     await page.goto(`${server.baseUrl}/space-idle.html`);

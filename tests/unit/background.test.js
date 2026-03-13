@@ -49,6 +49,7 @@ function createEventRegistry() {
 
 function loadBackgroundHarness() {
   const storage = createStorage();
+  const executeScriptCalls = [];
   const registries = {
     runtimeOnInstalled: createEventRegistry(),
     runtimeOnMessage: createEventRegistry(),
@@ -84,7 +85,10 @@ function loadBackgroundHarness() {
       onMessage: registries.runtimeOnMessage
     },
     scripting: {
-      async executeScript() {}
+      async executeScript(options) {
+        executeScriptCalls.push(options);
+        return [{ result: { ok: true } }];
+      }
     },
     storage: {
       local: storage.api
@@ -121,6 +125,7 @@ function loadBackgroundHarness() {
   return {
     chrome,
     context,
+    executeScriptCalls,
     registries,
     storage: storage.state,
     tabs
@@ -359,4 +364,37 @@ test("STOP_MACRO_RUN clears the current run state", async () => {
   assert.equal(response.ok, true);
   assert.equal(response.run.running, false);
   assert.equal(response.run.lastMessage, "사용자가 매크로 실행을 중지했습니다.");
+});
+
+test("START_MACRO_RUN enables native dialog auto-accept and STOP_MACRO_RUN disables it", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  const startResponse = await dispatchRuntimeMessage(listener, {
+    type: "START_MACRO_RUN",
+    tabId: 1,
+    steps: [
+      {
+        type: "wait",
+        ms: 50
+      }
+    ]
+  });
+
+  assert.equal(startResponse.ok, true);
+  assert.equal(harness.executeScriptCalls.length > 0, true);
+  const enabledCall = harness.executeScriptCalls.find((call) => call.world === "MAIN");
+  assert.equal(enabledCall?.world, "MAIN");
+  assert.deepEqual(normalize(enabledCall?.args), [true]);
+
+  const stopResponse = await dispatchRuntimeMessage(listener, {
+    type: "STOP_MACRO_RUN"
+  });
+
+  assert.equal(stopResponse.ok, true);
+  const disabledCall = [...harness.executeScriptCalls]
+    .reverse()
+    .find((call) => call.world === "MAIN" && Array.isArray(call.args) && call.args[0] === false);
+  assert.equal(disabledCall?.world, "MAIN");
+  assert.deepEqual(normalize(disabledCall?.args), [false]);
 });

@@ -555,6 +555,75 @@ async function sendTabMessage(tabId, message) {
   return await chrome.tabs.sendMessage(tabId, message);
 }
 
+function collectRunDialogTabIds(runState) {
+  return uniqTabIds([
+    runState?.rootTabId,
+    runState?.currentTabId,
+    ...(runState?.currentTabTrail || []),
+    ...(runState?.pendingPopupTabIds || [])
+  ]);
+}
+
+async function setNativeDialogAutoAccept(tabId, enabled) {
+  if (!isFiniteTabId(tabId)) return false;
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      world: "MAIN",
+      args: [!!enabled],
+      func: (nextEnabled) => {
+        const KEY = "__EASY_WEB_MACRO_NATIVE_DIALOG_PATCH__";
+        let state = window[KEY];
+
+        if (!state) {
+          state = {
+            enabled: false,
+            nativeAlert: window.alert,
+            nativeConfirm: window.confirm
+          };
+
+          Object.defineProperty(window, KEY, {
+            value: state,
+            configurable: true
+          });
+
+          window.alert = function (...args) {
+            if (window[KEY]?.enabled) {
+              return undefined;
+            }
+
+            return state.nativeAlert.apply(window, args);
+          };
+
+          window.confirm = function (...args) {
+            if (window[KEY]?.enabled) {
+              return true;
+            }
+
+            return state.nativeConfirm.apply(window, args);
+          };
+        }
+
+        state.enabled = !!nextEnabled;
+        return { ok: true };
+      }
+    });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function syncRunDialogAutoAccept(runState, enabled) {
+  const tabIds = collectRunDialogTabIds(runState);
+
+  for (const tabId of tabIds) {
+    await setNativeDialogAutoAccept(tabId, enabled);
+  }
+}
+
 async function executeMainWorldClick(tabId, frameId, selector) {
   const target = { tabId };
 
@@ -748,6 +817,8 @@ async function clearPopupWaitAlarm() {
 }
 
 async function failRun(message) {
+  const runState = await getRunState();
+  await syncRunDialogAutoAccept(runState, false);
   await clearPopupWaitAlarm();
   await appendErrorLog(message || "실행 실패", "run");
   await setRunState({
@@ -758,6 +829,8 @@ async function failRun(message) {
 }
 
 async function finishRun(message) {
+  const runState = await getRunState();
+  await syncRunDialogAutoAccept(runState, false);
   await clearPopupWaitAlarm();
   await setRunState({
     running: false,
@@ -767,6 +840,8 @@ async function finishRun(message) {
 }
 
 async function stopRun(message) {
+  const runState = await getRunState();
+  await syncRunDialogAutoAccept(runState, false);
   await clearPopupWaitAlarm();
   return await setRunState({
     running: false,
@@ -962,6 +1037,7 @@ function findBestPopupCandidate(tabs, runState, step, options = {}) {
 
 async function switchRunToTab(runState, tabId, message) {
   await ensureContentReady(tabId);
+  await setNativeDialogAutoAccept(tabId, true);
 
   const nextTrail = [...(runState.currentTabTrail || [])];
   if (isFiniteTabId(runState.currentTabId) && runState.currentTabId !== tabId) {
@@ -998,6 +1074,7 @@ async function restoreRunToPreviousTab(runState, closedTabId) {
       }
 
       await ensureContentReady(fallbackTabId);
+      await setNativeDialogAutoAccept(fallbackTabId, true);
 
       return await setRunState({
         ...runState,
@@ -1016,6 +1093,7 @@ async function restoreRunToPreviousTab(runState, closedTabId) {
       const rootTab = await chrome.tabs.get(runState.rootTabId);
       if (!isRestrictedUrl(rootTab.url || "")) {
         await ensureContentReady(runState.rootTabId);
+        await setNativeDialogAutoAccept(runState.rootTabId, true);
 
         return await setRunState({
           ...runState,
@@ -1086,6 +1164,7 @@ async function restartMacroRunIteration(runState) {
   }
 
   await ensureContentReady(runState.rootTabId);
+  await setNativeDialogAutoAccept(runState.rootTabId, true);
 
   const nextIteration = (runState.iteration || 1) + 1;
 
@@ -1117,7 +1196,12 @@ async function continueMacroRun(passedState) {
     return;
   }
 
-  while (runState.running && !runState.waitingForPopup) {
+  while (true) {
+    runState = await getRunState();
+    if (!runState.running || runState.waitingForPopup) {
+      return;
+    }
+
     if (runState.stepIndex >= runState.steps.length) {
       if (runState.repeatRemaining > 1) {
         try {
@@ -1184,12 +1268,28 @@ async function continueMacroRun(passedState) {
         throw new Error(response?.message || "step 실행 실패");
       }
 
+      const latestRunState = await getRunState();
+      if (!latestRunState.running) {
+        return;
+      }
+
+      if (
+        latestRunState.stepIndex > runState.stepIndex ||
+        latestRunState.currentTabId !== runState.currentTabId ||
+        latestRunState.activeStepIndex !== runState.stepIndex ||
+        latestRunState.activeStepType !== step.type ||
+        latestRunState.activeStepTabId !== runState.currentTabId
+      ) {
+        runState = latestRunState;
+        continue;
+      }
+
       runState = await setRunState({
-        ...runState,
-        stepIndex: runState.stepIndex + 1,
+        ...latestRunState,
+        stepIndex: latestRunState.stepIndex + 1,
         lastMessage:
           response.message ||
-          `${runState.stepIndex + 1} / ${runState.steps.length} step 완료`,
+          `${latestRunState.stepIndex + 1} / ${latestRunState.steps.length} step 완료`,
         error: "",
         knownTabIdsAtWaitStart,
         activeStepIndex: -1,
@@ -1368,6 +1468,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   await reviveRecordingOnTrackedTab(tabId, tab);
   await handleRecordingRelatedTab(tabId, tab);
   await handleRunRelatedTab(tabId, tab);
+
+  const runState = await getRunState();
+  if (runState.running && collectRunDialogTabIds(runState).includes(tabId)) {
+    await setNativeDialogAutoAccept(tabId, true);
+  }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -1620,6 +1725,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             repeatDelayMs,
             iteration: 1
           });
+
+          await syncRunDialogAutoAccept(await getRunState(), true);
 
           continueMacroRun().catch(async (error) => {
             await failRun(error?.message || String(error));

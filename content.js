@@ -1023,7 +1023,7 @@
     if (el.tagName === "SELECT") return el;
 
     const type = (el.getAttribute("type") || "text").toLowerCase();
-    if (["password", "hidden", "file"].includes(type)) {
+    if (["hidden", "file"].includes(type)) {
       return null;
     }
 

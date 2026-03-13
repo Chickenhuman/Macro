@@ -47,6 +47,20 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/password-input.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Password Input",
+          `
+            <label for="passwordInput">비밀번호</label>
+            <input id="passwordInput" type="password" autocomplete="current-password" />
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/popup-root.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -688,6 +702,28 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/native-alert-apply.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Native Alert Apply",
+          `
+            <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+              <input id="set_apprv" type="button" value="반영" onclick="approveWithAlert();" />
+            </div>
+            <div id="result"></div>
+          `,
+          `
+            window.approveWithAlert = function() {
+              alert("결재자가 한 명일 때는 자동으로 전결처리 됩니다.");
+              document.querySelector("#result").textContent = "approved";
+            };
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/pudd-dropdown.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -953,6 +989,40 @@ test.describe("extension smoke tests", () => {
 
     expect(steps.some((step) => step.type === "input" && step.selector === "#nameInput")).toBe(true);
     expect(steps.some((step) => step.type === "click" && step.selector === "#nextBtn")).toBe(true);
+  });
+
+  test("records password field changes as input steps", async () => {
+    const page = await bundle.context.newPage();
+    await page.goto(`${server.baseUrl}/password-input.html`);
+
+    const tabId = await findTabId(extensionPage, page.url());
+    expect(tabId).toBeTruthy();
+
+    const startResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_RECORDING",
+      tabId
+    });
+    expect(startResponse.ok).toBe(true);
+
+    await page.fill("#passwordInput", "S3cret!");
+    await page.locator("#passwordInput").blur();
+
+    const stopResponse = await sendRuntimeMessage(extensionPage, {
+      type: "STOP_RECORDING"
+    });
+    expect(stopResponse.ok).toBe(true);
+
+    const storage = await readStorage(extensionPage);
+    const steps = storage.macroSteps || [];
+
+    expect(
+      steps.some(
+        (step) =>
+          step.type === "input" &&
+          step.selector === "#passwordInput" &&
+          step.value === "S3cret!"
+      )
+    ).toBe(true);
   });
 
   test("records related popup tab actions and inserts waitForPopup", async () => {
@@ -1477,6 +1547,44 @@ test.describe("extension smoke tests", () => {
         return await runPage.textContent("#result");
       })
       .toBe("applied");
+  });
+
+  test("auto-accepts native alert dialogs during macro run", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/native-alert-apply.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    let dialogSeen = false;
+    runPage.on("dialog", async (dialog) => {
+      dialogSeen = true;
+      await dialog.dismiss();
+    });
+
+    const steps = [
+      {
+        type: "click",
+        selector: "#set_apprv",
+        label: "반영"
+      }
+    ];
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return await runPage.textContent("#result");
+      })
+      .toBe("approved");
+
+    await runPage.waitForTimeout(300);
+    expect(dialogSeen).toBe(false);
   });
 
   test("saves and reloads named macros from the popup UI", async () => {

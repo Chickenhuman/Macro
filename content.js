@@ -12,7 +12,12 @@
   let overlayBody = null;
   let pendingDropdownRecord = null;
   let pendingKeyClickSuppression = null;
+  let recordingFrameObserver = null;
+  let recordingFrameRefreshTimer = null;
+  const observedRecordingFrames = new WeakSet();
   const STEPS_KEY = "macroSteps";
+  const RECORD_STATE_EVENT_TYPE = "__EASY_WEB_MACRO_RECORD_STATE__";
+  const FRAME_READY_EVENT_TYPE = "__EASY_WEB_MACRO_FRAME_READY__";
 
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -706,6 +711,66 @@
     }
   }
 
+  function postRecordingStateToFrame(iframe, enabled, nextDebugEnabled) {
+    try {
+      iframe?.contentWindow?.postMessage(
+        {
+          type: RECORD_STATE_EVENT_TYPE,
+          enabled: !!enabled,
+          debugEnabled: !!nextDebugEnabled
+        },
+        "*"
+      );
+    } catch {
+      // same-tab frame state propagation is best-effort
+    }
+  }
+
+  function postRecordingStateToWindow(targetWindow, enabled, nextDebugEnabled) {
+    try {
+      targetWindow?.postMessage(
+        {
+          type: RECORD_STATE_EVENT_TYPE,
+          enabled: !!enabled,
+          debugEnabled: !!nextDebugEnabled
+        },
+        "*"
+      );
+    } catch {
+      // same-tab frame state propagation is best-effort
+    }
+  }
+
+  function broadcastRecordingStateToChildFrames(enabled, nextDebugEnabled) {
+    const frames = document.querySelectorAll?.("iframe") || [];
+    for (const iframe of frames) {
+      postRecordingStateToFrame(iframe, enabled, nextDebugEnabled);
+    }
+  }
+
+  function notifyParentFrameReady() {
+    if (window.top === window || typeof window.parent?.postMessage !== "function") {
+      return;
+    }
+
+    const payload = {
+      type: FRAME_READY_EVENT_TYPE
+    };
+
+    try {
+      window.parent.postMessage(payload, "*");
+      setTimeout(() => {
+        try {
+          window.parent.postMessage(payload, "*");
+        } catch {
+          // ignore delayed retry failure
+        }
+      }, 150);
+    } catch {
+      // ignore parent notify failure
+    }
+  }
+
   function setOverlay(title, body = "") {
     ensureOverlay();
     overlayTitle.textContent = title;
@@ -747,6 +812,136 @@
     }
   }
 
+  function applyRecordingState(enabled, nextDebugEnabled, options = {}) {
+    const shouldPropagate = options.propagate !== false;
+
+    recordMode = !!enabled;
+    debugMode = !!nextDebugEnabled;
+    lastRecordedAt = null;
+    pendingDropdownRecord = null;
+    pendingKeyClickSuppression = null;
+
+    if (recordMode) {
+      startRecordingFrameObserver();
+      setOverlay("매크로 기록 중", "페이지에서 버튼을 클릭하거나 값을 입력하세요.");
+    } else {
+      stopRecordingFrameObserver();
+      removeOverlay();
+    }
+
+    if (shouldPropagate) {
+      broadcastRecordingStateToChildFrames(recordMode, debugMode);
+    }
+  }
+
+  function stopRecordingFrameObserver() {
+    if (recordingFrameRefreshTimer) {
+      clearTimeout(recordingFrameRefreshTimer);
+      recordingFrameRefreshTimer = null;
+    }
+
+    if (recordingFrameObserver) {
+      recordingFrameObserver.disconnect();
+      recordingFrameObserver = null;
+    }
+  }
+
+  function scheduleRecordingFrameRefresh(reason = "iframe") {
+    if (!recordMode) return;
+
+    if (recordingFrameRefreshTimer) {
+      clearTimeout(recordingFrameRefreshTimer);
+    }
+
+    recordingFrameRefreshTimer = setTimeout(async () => {
+      recordingFrameRefreshTimer = null;
+
+      try {
+        await chrome.runtime.sendMessage({
+          type: "REFRESH_RECORDING_FRAMES",
+          reason
+        });
+      } catch {
+        // same-tab iframe rebinding is best-effort during recording
+      }
+    }, 120);
+  }
+
+  function bindRecordingFrame(iframe) {
+    if (!(iframe instanceof Element)) return;
+    if (iframe.tagName !== "IFRAME") return;
+    if (observedRecordingFrames.has(iframe)) return;
+
+    observedRecordingFrames.add(iframe);
+    iframe.addEventListener(
+      "load",
+      () => {
+        if (recordMode) {
+          postRecordingStateToFrame(iframe, true, debugMode);
+        }
+        scheduleRecordingFrameRefresh("iframe-load");
+      },
+      true
+    );
+  }
+
+  function bindRecordingFramesWithin(node) {
+    if (!(node instanceof Element)) return false;
+
+    let found = false;
+
+    if (node.tagName === "IFRAME") {
+      bindRecordingFrame(node);
+      found = true;
+    }
+
+    const descendants = node.querySelectorAll?.("iframe") || [];
+    for (const iframe of descendants) {
+      bindRecordingFrame(iframe);
+      found = true;
+    }
+
+    return found;
+  }
+
+  function startRecordingFrameObserver() {
+    if (recordingFrameObserver || typeof MutationObserver !== "function") {
+      return;
+    }
+
+    const root = document.documentElement || document.body;
+    if (!(root instanceof Element)) {
+      return;
+    }
+
+    bindRecordingFramesWithin(root);
+
+    recordingFrameObserver = new MutationObserver((mutations) => {
+      if (!recordMode) return;
+
+      let foundFrame = false;
+
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes || []) {
+          if (!(node instanceof Element)) continue;
+
+          if (bindRecordingFramesWithin(node)) {
+            foundFrame = true;
+          }
+        }
+      }
+
+      if (foundFrame) {
+        scheduleRecordingFrameRefresh("iframe-added");
+      }
+    });
+
+    recordingFrameObserver.observe(root, {
+      childList: true,
+      subtree: true
+    });
+  }
+
   function isRetryableRuntimeMessageError(error) {
     const message = String(error?.message || error || "");
     return (
@@ -755,6 +950,29 @@
       message.includes("Receiving end does not exist")
     );
   }
+
+  if (typeof window.addEventListener === "function") {
+    window.addEventListener(
+      "message",
+      (event) => {
+        if (event?.data?.type === FRAME_READY_EVENT_TYPE) {
+          if (recordMode) {
+            postRecordingStateToWindow(event.source, recordMode, debugMode);
+          }
+          return;
+        }
+
+        if (event?.data?.type !== RECORD_STATE_EVENT_TYPE) {
+          return;
+        }
+
+        applyRecordingState(!!event.data.enabled, !!event.data.debugEnabled);
+      },
+      true
+    );
+  }
+
+  notifyParentFrameReady();
 
   function sanitizeRecordedStep(step) {
     if (!step || typeof step !== "object" || !step.type) {
@@ -2062,12 +2280,7 @@
         }
 
         if (message?.type === "START_RECORD") {
-          debugMode = !!message.debugEnabled;
-          recordMode = true;
-          lastRecordedAt = null;
-          pendingDropdownRecord = null;
-          pendingKeyClickSuppression = null;
-          setOverlay("매크로 기록 중", "페이지에서 버튼을 클릭하거나 값을 입력하세요.");
+          applyRecordingState(true, !!message.debugEnabled);
           sendResponse({ ok: true });
           return;
         }
@@ -2076,12 +2289,7 @@
           if (pendingDropdownRecord) {
             await finalizePendingDropdownRecord();
           }
-          recordMode = false;
-          debugMode = false;
-          lastRecordedAt = null;
-          pendingDropdownRecord = null;
-          pendingKeyClickSuppression = null;
-          removeOverlay();
+          applyRecordingState(false, false);
           sendResponse({ ok: true });
           return;
         }

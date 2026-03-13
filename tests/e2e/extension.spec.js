@@ -61,6 +61,50 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/iframe-password-root.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Iframe Password Root",
+          `
+            <button id="openPasswordDialog" type="button">결재</button>
+            <div id="dialogHost"></div>
+          `,
+          `
+            document.querySelector("#openPasswordDialog").addEventListener("click", () => {
+              const host = document.querySelector("#dialogHost");
+              if (host.querySelector("#dlgFrame")) {
+                return;
+              }
+
+              const frame = document.createElement("iframe");
+              frame.id = "dlgFrame";
+              frame.src = "/iframe-password-child.html";
+              frame.width = "640";
+              frame.height = "240";
+              host.appendChild(frame);
+            });
+          `
+        )
+      );
+      return;
+    }
+
+    if (route === "/iframe-password-child.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Iframe Password Child",
+          `
+            <label for="signPassword">비밀번호</label>
+            <input id="signPassword" type="password" autocomplete="current-password" />
+            <button id="closeFocus" type="button">다음</button>
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/space-toggle.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -1065,6 +1109,66 @@ test.describe("extension smoke tests", () => {
           step.type === "input" &&
           step.selector === "#passwordInput" &&
           step.value === "S3cret!"
+      )
+    ).toBe(true);
+  });
+
+  test("records password field changes inside a dynamically added iframe", async () => {
+    const page = await bundle.context.newPage();
+    await page.goto(`${server.baseUrl}/iframe-password-root.html`);
+
+    const tabId = await findTabId(extensionPage, page.url());
+    expect(tabId).toBeTruthy();
+
+    const startResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_RECORDING",
+      tabId
+    });
+    expect(startResponse.ok).toBe(true);
+
+    await page.click("#openPasswordDialog");
+    await page.locator("#dlgFrame").waitFor();
+
+    const frame = page.frameLocator("#dlgFrame");
+    await frame.locator("#signPassword").waitFor();
+    await expect
+      .poll(async () => {
+        return await frame.locator("html").textContent();
+      })
+      .toContain("매크로 기록 중");
+    await frame.locator("#signPassword").fill("1358314a!");
+    await frame.locator("#signPassword").blur();
+    await frame.locator("#closeFocus").click();
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return (storage.macroSteps || []).some(
+          (step) =>
+            step.type === "input" &&
+            step.selector === "#signPassword" &&
+            step.value === "1358314a!"
+        );
+      })
+      .toBe(true);
+
+    const stopResponse = await sendRuntimeMessage(extensionPage, {
+      type: "STOP_RECORDING"
+    });
+    expect(stopResponse.ok).toBe(true);
+
+    const storage = await readStorage(extensionPage);
+    const steps = storage.macroSteps || [];
+
+    expect(steps.some((step) => step.type === "click" && step.selector === "#openPasswordDialog")).toBe(
+      true
+    );
+    expect(
+      steps.some(
+        (step) =>
+          step.type === "input" &&
+          step.selector === "#signPassword" &&
+          step.value === "1358314a!"
       )
     ).toBe(true);
   });

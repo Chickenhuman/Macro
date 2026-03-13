@@ -3,11 +3,19 @@
   "name": "Doc Reception Macro",
   "version": "1.1.0",
   "description": "문서 접수 반복 작업용 크롬 확장",
-  "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms"],
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
   "action": {
     "default_popup": "popup.html"
   }

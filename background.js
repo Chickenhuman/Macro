@@ -569,6 +569,61 @@ async function sendTabMessage(tabId, message) {
   return await chrome.tabs.sendMessage(tabId, message);
 }
 
+async function getTabFrameIds(tabId) {
+  if (!chrome.webNavigation?.getAllFrames) {
+    return [];
+  }
+
+  try {
+    const frames = await chrome.webNavigation.getAllFrames({
+      tabId
+    });
+    return uniqTabIds((frames || []).map((frame) => frame?.frameId));
+  } catch {
+    return [];
+  }
+}
+
+async function broadcastTabMessage(tabId, message) {
+  const frameIds = await getTabFrameIds(tabId);
+
+  if (!frameIds.length) {
+    return [
+      {
+        frameId: null,
+        response: await sendTabMessage(tabId, message)
+      }
+    ];
+  }
+
+  const responses = [];
+
+  for (const frameId of frameIds) {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, message, {
+        frameId
+      });
+      responses.push({
+        frameId,
+        response
+      });
+    } catch {
+      // frame-level delivery is best-effort; other frames may still respond
+    }
+  }
+
+  if (responses.length) {
+    return responses;
+  }
+
+  return [
+    {
+      frameId: null,
+      response: await sendTabMessage(tabId, message)
+    }
+  ];
+}
+
 function collectRunDialogTabIds(runState) {
   return uniqTabIds([
     runState?.rootTabId,
@@ -744,13 +799,15 @@ async function startRecordingOnTab(tabId) {
   await ensureContentReady(tabId);
   const debugState = await getDebugState();
 
-  const response = await sendTabMessageWithReconnect(tabId, {
+  const responses = await broadcastTabMessage(tabId, {
     type: "START_RECORD",
     debugEnabled: !!debugState.enabled
   });
 
-  if (!response?.ok) {
-    throw new Error(response?.message || "기록 시작 실패");
+  const success = responses.some((entry) => entry?.response?.ok);
+  if (!success) {
+    const failed = responses.find((entry) => entry?.response && entry.response.ok === false);
+    throw new Error(failed?.response?.message || "기록 시작 실패");
   }
 }
 
@@ -760,7 +817,7 @@ async function broadcastDebugMode(enabled) {
 
   for (const tabId of tracked) {
     try {
-      await sendTabMessage(tabId, {
+      await broadcastTabMessage(tabId, {
         type: "SET_DEBUG_MODE",
         enabled: !!enabled
       });
@@ -819,7 +876,7 @@ async function stopRecordingOnTab(tabId) {
   if (!isFiniteTabId(tabId)) return;
 
   try {
-    await sendTabMessage(tabId, {
+    await broadcastTabMessage(tabId, {
       type: "STOP_RECORD"
     });
   } catch {
@@ -2063,6 +2120,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             ok: true,
             recording: nextState
           });
+          return;
+        }
+
+        case "REFRESH_RECORDING_FRAMES": {
+          const tabId = Number(sender?.tab?.id);
+          const recording = await getRecordingState();
+          const tracked = new Set(recording.trackedTabIds || []);
+
+          if (!recording.enabled || !isFiniteTabId(tabId) || !tracked.has(tabId)) {
+            sendResponse({
+              ok: true,
+              refreshed: false
+            });
+            return;
+          }
+
+          try {
+            await startRecordingOnTab(tabId);
+            sendResponse({
+              ok: true,
+              refreshed: true
+            });
+          } catch (error) {
+            await appendErrorLog(error?.message || String(error), "recording:refresh-frame");
+            sendResponse({
+              ok: false,
+              message: error?.message || String(error)
+            });
+          }
           return;
         }
 

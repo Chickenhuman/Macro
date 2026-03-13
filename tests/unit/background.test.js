@@ -241,6 +241,78 @@ test("advances an in-flight click step when the popup tab closes before the cont
   assert.equal(continuedState.activeStepTabId, null);
 });
 
+test("continueMacroRun recovers when a click closes the popup before the response arrives", async () => {
+  const harness = loadBackgroundHarness();
+  const onRemoved = harness.registries.tabsOnRemoved.listeners[0];
+  const closedMessage =
+    "A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received";
+  let runSingleStepCalls = 0;
+
+  harness.tabs.set(2, {
+    id: 2,
+    url: "https://example.com/approvalLineWrite.do",
+    windowId: 11
+  });
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+
+      if (runSingleStepCalls === 1) {
+        setTimeout(() => {
+          harness.tabs.delete(2);
+          onRemoved(2).catch(() => {});
+        }, 20);
+        throw new Error(closedMessage);
+      }
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 2,
+    currentTabTrail: [1],
+    steps: [
+      {
+        type: "click",
+        selector: "#set_apprv",
+        label: "반영"
+      },
+      {
+        type: "click",
+        selector: "#btnConfirmD",
+        label: "확인"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 중",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(runSingleStepCalls, 2);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
 test("restores to the previous tab when the current run tab is already missing", async () => {
   const harness = loadBackgroundHarness();
   let sentToTabId = null;
@@ -287,6 +359,82 @@ test("restores to the previous tab when the current run tab is already missing",
   await harness.context.continueMacroRun(harness.storage.macroRunState);
 
   assert.equal(sentToTabId, 1);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
+test("continueMacroRun recovers when a click reloads the current tab before the response arrives", async () => {
+  const harness = loadBackgroundHarness();
+  const closedMessage =
+    "A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received";
+  let runSingleStepCalls = 0;
+
+  harness.tabs.set(1, {
+    id: 1,
+    url: "https://example.com/docCommonDraftView.do?firstApproval=Y",
+    windowId: 10,
+    status: "complete"
+  });
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+
+      if (runSingleStepCalls === 1) {
+        setTimeout(() => {
+          const currentTab = harness.tabs.get(1);
+          harness.tabs.set(1, {
+            ...currentTab,
+            status: "loading",
+            pendingUrl: currentTab.url
+          });
+        }, 20);
+        throw new Error(closedMessage);
+      }
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#set_apprv",
+        label: "반영"
+      },
+      {
+        type: "click",
+        selector: "#btnConfirmD",
+        label: "확인"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 중",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(runSingleStepCalls, 2);
   assert.equal(harness.storage.macroRunState.running, false);
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
 });
@@ -388,6 +536,68 @@ test("GET_DATA backfills legacy key steps without key metadata", async () => {
     }
   ]);
   assert.deepEqual(normalize(harness.storage.macroSteps), normalize(response.steps));
+});
+
+test("handleRunRelatedTab completes waitForPopup when the current tab reloads to the expected URL", async () => {
+  const harness = loadBackgroundHarness();
+  let continuedState = null;
+
+  harness.tabs.set(1, {
+    id: 1,
+    url: "https://example.com/docCommonDraftView.do?firstApproval=Y",
+    windowId: 10,
+    status: "complete"
+  });
+
+  harness.context.continueMacroRun = async (state) => {
+    continuedState = normalize(state);
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#btnConfirm",
+        label: "확인"
+      },
+      {
+        type: "waitForPopup",
+        urlIncludes: "docCommonDraftView.do",
+        timeout: 10000
+      },
+      {
+        type: "click",
+        selector: "#next",
+        label: "다음"
+      }
+    ],
+    stepIndex: 1,
+    waitingForPopup: true,
+    popupUrlIncludes: "docCommonDraftView.do",
+    popupTimeout: 10000,
+    popupWaitStartedAt: Date.now(),
+    lastMessage: "새 창 대기 중: docCommonDraftView.do",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [1],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.handleRunRelatedTab(1, harness.tabs.get(1));
+
+  assert.equal(continuedState.stepIndex, 2);
+  assert.equal(continuedState.currentTabId, 1);
+  assert.equal(continuedState.waitingForPopup, false);
+  assert.equal(continuedState.lastMessage.includes("현재 탭 새로고침 완료"), true);
 });
 
 test("continueMacroRun repeats the full macro for the requested repeat count", async () => {

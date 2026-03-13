@@ -1079,6 +1079,27 @@ async function switchRunToTab(runState, tabId, message) {
   });
 }
 
+async function completeWaitForCurrentRunTab(runState, tab) {
+  await ensureContentReady(tab.id);
+  await setNativeDialogAutoAccept(tab.id, true);
+  await clearPopupWaitAlarm();
+
+  const nextState = await setRunState({
+    ...runState,
+    stepIndex: runState.stepIndex + 1,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: `현재 탭 새로고침 완료: ${tab.url || tab.title || tab.id}`,
+    error: "",
+    pendingPopupTabIds: (runState.pendingPopupTabIds || []).filter((id) => id !== tab.id),
+    knownTabIdsAtWaitStart: []
+  });
+
+  await continueMacroRun(nextState);
+}
+
 async function restoreRunToPreviousTab(runState, closedTabId) {
   const trail = [...(runState.currentTabTrail || [])].filter((id) => id !== closedTabId);
 
@@ -1208,6 +1229,87 @@ async function restartMacroRunIteration(runState) {
   });
 }
 
+async function waitForClickStepRecovery(runState, originalTab, knownTabIdsAtWaitStart, timeout = 2500) {
+  const startedAt = Date.now();
+  const originalUrl = String(originalTab?.url || "");
+
+  while (Date.now() - startedAt < timeout) {
+    const latestRunState = await getRunState();
+
+    if (!latestRunState.running) {
+      return {
+        handled: true,
+        runState: latestRunState
+      };
+    }
+
+    if (latestRunState.stepIndex > runState.stepIndex) {
+      return {
+        handled: true,
+        runState: latestRunState
+      };
+    }
+
+    if (
+      latestRunState.currentTabId !== runState.currentTabId &&
+      latestRunState.activeStepIndex === -1 &&
+      latestRunState.activeStepType === "" &&
+      latestRunState.activeStepTabId == null
+    ) {
+      return {
+        handled: true,
+        runState: latestRunState
+      };
+    }
+
+    try {
+      const currentTab = await chrome.tabs.get(runState.currentTabId);
+      const currentUrl = String(currentTab?.url || "");
+      const pendingUrl = String(currentTab?.pendingUrl || "");
+      const navigated =
+        !!pendingUrl ||
+        (originalUrl && currentUrl && currentUrl !== originalUrl) ||
+        currentTab?.status === "loading";
+
+      const stillHandlingSameStep =
+        latestRunState.activeStepIndex === runState.stepIndex &&
+        latestRunState.activeStepType === runState.activeStepType &&
+        latestRunState.activeStepTabId === runState.currentTabId;
+
+      if (navigated && stillHandlingSameStep) {
+        const advancedRunState = await setRunState({
+          ...latestRunState,
+          stepIndex: latestRunState.stepIndex + 1,
+          lastMessage:
+            `${latestRunState.stepIndex + 1} / ${latestRunState.steps.length} step 완료 ` +
+            "(탭 전환/새로고침 감지)",
+          error: "",
+          knownTabIdsAtWaitStart,
+          activeStepIndex: -1,
+          activeStepType: "",
+          activeStepTabId: null
+        });
+
+        return {
+          handled: true,
+          runState: advancedRunState
+        };
+      }
+    } catch (error) {
+      if (!isMissingTabError(error)) {
+        throw error;
+      }
+    }
+
+    await delay(150);
+  }
+
+  return {
+    handled: false,
+    runState: await getRunState()
+  };
+}
+
 async function continueMacroRun(passedState) {
   let runState = passedState || (await getRunState());
 
@@ -1254,9 +1356,11 @@ async function continueMacroRun(passedState) {
       return;
     }
 
+    let knownTabIdsAtWaitStart = [];
+    let tab = null;
+
     try {
       const nextStep = sanitizeStep(runState.steps[runState.stepIndex + 1]);
-      let knownTabIdsAtWaitStart = [];
       if (nextStep?.type === "waitForPopup") {
         const tabsBeforeAction = await chrome.tabs.query({});
         knownTabIdsAtWaitStart = tabsBeforeAction.map((tab) => tab.id).filter(isFiniteTabId);
@@ -1270,7 +1374,6 @@ async function continueMacroRun(passedState) {
         knownTabIdsAtWaitStart
       });
 
-      let tab;
       try {
         tab = await chrome.tabs.get(runState.currentTabId);
       } catch (error) {
@@ -1350,14 +1453,13 @@ async function continueMacroRun(passedState) {
       }
 
       if (isRetryableTabMessageError(error) && step.type === "click") {
-        await delay(250);
-        const latestRunState = await getRunState();
-        if (
-          latestRunState.running &&
-          latestRunState.stepIndex > runState.stepIndex &&
-          latestRunState.activeStepIndex === -1
-        ) {
-          return;
+        const recovery = await waitForClickStepRecovery(runState, tab, knownTabIdsAtWaitStart);
+        if (recovery.handled) {
+          runState = recovery.runState;
+          if (!runState.running) {
+            return;
+          }
+          continue;
         }
       }
       await failRun(error?.message || String(error));
@@ -1423,6 +1525,24 @@ async function handleRunRelatedTab(tabId, tab) {
   const step = {
     urlIncludes: runState.popupUrlIncludes
   };
+
+  if (tabId === runState.currentTabId) {
+    const expected = String(step.urlIncludes || "").trim();
+    if (!expected || String(tab?.url || "").includes(expected)) {
+      const waitMs = Date.now() - (runState.popupWaitStartedAt || 0);
+      if (runState.popupTimeout > 0 && waitMs > runState.popupTimeout) {
+        await failRun(`새 창 대기 시간 초과: ${runState.popupUrlIncludes || "조건 없음"}`);
+        return;
+      }
+
+      try {
+        await completeWaitForCurrentRunTab(runState, tab);
+      } catch (error) {
+        await failRun(error?.message || String(error));
+      }
+    }
+    return;
+  }
 
   const score = scorePopupCandidate(tab, runState, step);
   if (score < 0) return;

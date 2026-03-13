@@ -1,10 +1,20 @@
 const startRecordBtn = document.getElementById("startRecordBtn");
 const stopRecordBtn = document.getElementById("stopRecordBtn");
 const runBtn = document.getElementById("runBtn");
+const stopRunBtn = document.getElementById("stopRunBtn");
+const undoLastStepBtn = document.getElementById("undoLastStepBtn");
 const clearBtn = document.getElementById("clearBtn");
 const refreshBtn = document.getElementById("refreshBtn");
 const addWaitForTemplateBtn = document.getElementById("addWaitForTemplateBtn");
 const addWaitForPopupTemplateBtn = document.getElementById("addWaitForPopupTemplateBtn");
+const repeatCountInput = document.getElementById("repeatCountInput");
+const repeatDelayInput = document.getElementById("repeatDelayInput");
+const macroNameInput = document.getElementById("macroNameInput");
+const saveMacroBtn = document.getElementById("saveMacroBtn");
+const savedMacroSelect = document.getElementById("savedMacroSelect");
+const loadMacroBtn = document.getElementById("loadMacroBtn");
+const deleteMacroBtn = document.getElementById("deleteMacroBtn");
+const savedMacroMeta = document.getElementById("savedMacroMeta");
 
 const statusBadge = document.getElementById("statusBadge");
 const statusText = document.getElementById("statusText");
@@ -29,6 +39,7 @@ const DEBUG_LOGS_KEY = "macroDebugLogs";
 
 let currentData = {
   steps: [],
+  savedMacros: [],
   recording: {
     enabled: false,
     rootTabId: null,
@@ -62,6 +73,18 @@ function normalizeErrorText(message) {
 
 function formatErrorTimestamp(value) {
   if (!value) return "";
+
+  try {
+    return new Date(value).toLocaleString("ko-KR", {
+      hour12: false
+    });
+  } catch {
+    return String(value);
+  }
+}
+
+function formatSavedMacroTimestamp(value) {
+  if (!value) return "-";
 
   try {
     return new Date(value).toLocaleString("ko-KR", {
@@ -144,6 +167,67 @@ function renderDebugLogs() {
   debugLogBox.textContent = buildDebugLogText();
   toggleDebugBtn.textContent = currentData.debug?.enabled ? "디버그 끄기" : "디버그 켜기";
   toggleDebugBtn.classList.toggle("primary", !!currentData.debug?.enabled);
+}
+
+function getSelectedSavedMacro() {
+  const savedMacros = Array.isArray(currentData.savedMacros) ? currentData.savedMacros : [];
+  const selectedId = String(savedMacroSelect.value || "");
+  return savedMacros.find((item) => item.id === selectedId) || null;
+}
+
+function renderSavedMacros() {
+  const savedMacros = Array.isArray(currentData.savedMacros) ? currentData.savedMacros : [];
+  const previousValue = String(savedMacroSelect.value || "");
+
+  savedMacroSelect.innerHTML = "";
+
+  if (!savedMacros.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "저장된 매크로 없음";
+    savedMacroSelect.appendChild(option);
+    savedMacroSelect.disabled = true;
+    savedMacroMeta.textContent = "0개 저장됨";
+    renderControls();
+    return;
+  }
+
+  savedMacros.forEach((macro) => {
+    const option = document.createElement("option");
+    option.value = macro.id;
+    option.textContent = macro.name;
+    savedMacroSelect.appendChild(option);
+  });
+
+  savedMacroSelect.disabled = false;
+
+  const hasPrevious = savedMacros.some((macro) => macro.id === previousValue);
+  savedMacroSelect.value = hasPrevious ? previousValue : savedMacros[0].id;
+
+  const selected = getSelectedSavedMacro();
+  savedMacroMeta.textContent = selected
+    ? `${savedMacros.length}개 저장됨 · 최근 수정 ${formatSavedMacroTimestamp(selected.updatedAt)}`
+    : `${savedMacros.length}개 저장됨`;
+  renderControls();
+}
+
+function renderControls() {
+  const steps = Array.isArray(currentData.steps) ? currentData.steps : [];
+  const recording = currentData.recording || { enabled: false };
+  const run = currentData.run || { running: false };
+  const savedMacro = getSelectedSavedMacro();
+
+  startRecordBtn.disabled = !!run.running;
+  stopRecordBtn.disabled = !!run.running;
+  runBtn.disabled = !!run.running || !steps.length || !!recording.enabled;
+  clearBtn.disabled = !!run.running;
+  undoLastStepBtn.disabled = !!run.running || !steps.length;
+  saveMacroBtn.disabled = !!run.running || !steps.length;
+  loadMacroBtn.disabled = !!run.running || !savedMacro;
+  deleteMacroBtn.disabled = !!run.running || !savedMacro;
+  stopRunBtn.disabled = !run.running;
+  repeatCountInput.disabled = !!run.running;
+  repeatDelayInput.disabled = !!run.running;
 }
 
 async function writeErrorLogEntry(message, source = "popup") {
@@ -331,13 +415,16 @@ function describeStep(step) {
 function renderStatus() {
   const recording = currentData.recording || { enabled: false };
   const run = currentData.run || { running: false };
+  const repeatText =
+    run.repeatTotal > 1 ? ` ${run.iteration || 1}/${run.repeatTotal}회차` : "";
 
   if (run.running) {
     statusBadge.textContent = run.waitingForPopup ? "POP" : "RUN";
     statusBadge.classList.remove("recording");
     statusText.textContent = run.waitingForPopup
-      ? `새 창을 기다리는 중입니다. ${run.popupUrlIncludes || ""}`.trim()
-      : `매크로 실행 중입니다. ${run.stepIndex}/${(run.steps || []).length}`;
+      ? `새 창을 기다리는 중입니다.${repeatText} ${run.popupUrlIncludes || ""}`.trim()
+      : `매크로 실행 중입니다.${repeatText} ${run.stepIndex}/${(run.steps || []).length}`;
+    renderControls();
     return;
   }
 
@@ -345,12 +432,14 @@ function renderStatus() {
     statusBadge.textContent = "기록 중";
     statusBadge.classList.add("recording");
     statusText.textContent = "현재 페이지와 새로 열리는 관련 창에서 사용자 동작을 기록하고 있습니다.";
+    renderControls();
     return;
   }
 
   statusBadge.textContent = "대기";
   statusBadge.classList.remove("recording");
   statusText.textContent = "기록 중이 아니며 실행도 진행 중이 아닙니다.";
+  renderControls();
 }
 
 async function setSteps(steps) {
@@ -528,6 +617,7 @@ function renderSteps() {
     stepsList.style.display = "none";
     stepsList.innerHTML = "";
     jsonEditor.value = "[]";
+    renderControls();
     return;
   }
 
@@ -595,6 +685,7 @@ function renderSteps() {
   });
 
   jsonEditor.value = JSON.stringify(steps, null, 2);
+  renderControls();
 }
 
 async function loadData() {
@@ -613,6 +704,7 @@ async function loadData() {
 
     currentData = {
       steps: Array.isArray(response.steps) ? response.steps : [],
+      savedMacros: Array.isArray(response.savedMacros) ? response.savedMacros : [],
       recording: response.recording || {
         enabled: false,
         rootTabId: null,
@@ -639,6 +731,7 @@ async function loadData() {
 
     renderStatus();
     renderSteps();
+    renderSavedMacros();
     renderErrorLogs();
     renderDebugLogs();
 
@@ -699,10 +792,23 @@ async function runMacro() {
     throw new Error("이 페이지에서는 확장을 실행할 수 없습니다.");
   }
 
+  const repeatCount = Number.parseInt(repeatCountInput.value, 10);
+  const repeatDelayMs = Number.parseInt(repeatDelayInput.value, 10);
+
+  if (!Number.isInteger(repeatCount) || repeatCount < 1) {
+    throw new Error("반복 횟수는 1 이상의 정수여야 합니다.");
+  }
+
+  if (!Number.isInteger(repeatDelayMs) || repeatDelayMs < 0) {
+    throw new Error("반복 간격은 0 이상의 정수여야 합니다.");
+  }
+
   const response = await sendRuntimeMessage({
     type: "START_MACRO_RUN",
     tabId: tab.id,
-    steps
+    steps,
+    repeatCount,
+    repeatDelayMs
   });
 
   if (!response?.ok) {
@@ -711,6 +817,97 @@ async function runMacro() {
 
   await loadData();
   setResult(response.message || "실행 시작됨");
+}
+
+async function stopMacroRun() {
+  const response = await sendRuntimeMessage({
+    type: "STOP_MACRO_RUN"
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.message || "실행 중지 실패");
+  }
+
+  await loadData();
+  setResult(response.message || "실행 중지됨");
+}
+
+async function undoLastStep() {
+  const steps = Array.isArray(currentData.steps) ? currentData.steps : [];
+  if (!steps.length) {
+    throw new Error("되돌릴 step이 없습니다.");
+  }
+
+  const nextSteps = steps.slice(0, -1);
+  if (typeof editingStepIndex === "number" && editingStepIndex >= nextSteps.length) {
+    editingStepIndex = null;
+  }
+
+  await setSteps(nextSteps);
+  setResult("직전 기록 되돌리기 완료");
+}
+
+async function saveCurrentMacro() {
+  const name = String(macroNameInput.value || "").trim();
+  const steps = Array.isArray(currentData.steps) ? currentData.steps : [];
+
+  if (!name) {
+    throw new Error("매크로 이름을 입력하세요.");
+  }
+
+  if (!steps.length) {
+    throw new Error("저장할 step이 없습니다.");
+  }
+
+  const response = await sendRuntimeMessage({
+    type: "SAVE_MACRO",
+    name,
+    steps
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.message || "매크로 저장 실패");
+  }
+
+  await loadData();
+  if (response.savedMacro?.id) {
+    savedMacroSelect.value = response.savedMacro.id;
+  }
+  setResult(`매크로 저장 완료: ${name}`);
+}
+
+async function loadSavedMacro() {
+  const macro = getSelectedSavedMacro();
+  if (!macro) {
+    throw new Error("불러올 저장 매크로를 선택하세요.");
+  }
+
+  editingStepIndex = null;
+  await setSteps(macro.steps || []);
+  macroNameInput.value = macro.name;
+  setResult(`매크로 불러오기 완료: ${macro.name}`);
+}
+
+async function deleteSelectedMacro() {
+  const macro = getSelectedSavedMacro();
+  if (!macro) {
+    throw new Error("삭제할 저장 매크로를 선택하세요.");
+  }
+
+  const response = await sendRuntimeMessage({
+    type: "DELETE_SAVED_MACRO",
+    id: macro.id
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.message || "매크로 삭제 실패");
+  }
+
+  await loadData();
+  if (macroNameInput.value.trim() === macro.name) {
+    macroNameInput.value = "";
+  }
+  setResult(`매크로 삭제 완료: ${macro.name}`);
 }
 
 async function addWait(ms) {
@@ -794,6 +991,22 @@ runBtn.addEventListener("click", async () => {
   }
 });
 
+stopRunBtn.addEventListener("click", async () => {
+  try {
+    await stopMacroRun();
+  } catch (error) {
+    await handleUiError(error, "popup:stopMacroRun");
+  }
+});
+
+undoLastStepBtn.addEventListener("click", async () => {
+  try {
+    await undoLastStep();
+  } catch (error) {
+    await handleUiError(error, "popup:undoLastStep");
+  }
+});
+
 clearBtn.addEventListener("click", async () => {
   try {
     await clearSteps();
@@ -810,6 +1023,35 @@ refreshBtn.addEventListener("click", async () => {
   } catch (error) {
     await handleUiError(error, "popup:refresh");
   }
+});
+
+saveMacroBtn.addEventListener("click", async () => {
+  try {
+    await saveCurrentMacro();
+  } catch (error) {
+    await handleUiError(error, "popup:saveMacro");
+  }
+});
+
+loadMacroBtn.addEventListener("click", async () => {
+  try {
+    await loadSavedMacro();
+  } catch (error) {
+    await handleUiError(error, "popup:loadSavedMacro");
+  }
+});
+
+deleteMacroBtn.addEventListener("click", async () => {
+  try {
+    await deleteSelectedMacro();
+  } catch (error) {
+    await handleUiError(error, "popup:deleteSavedMacro");
+  }
+});
+
+savedMacroSelect.addEventListener("change", () => {
+  renderSavedMacros();
+  renderControls();
 });
 
 document.querySelectorAll("button[data-wait]").forEach((button) => {

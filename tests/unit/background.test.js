@@ -231,3 +231,132 @@ test("advances an in-flight click step when the popup tab closes before the cont
   assert.equal(continuedState.activeStepType, "");
   assert.equal(continuedState.activeStepTabId, null);
 });
+
+test("SAVE_MACRO stores and overwrites saved macros by name", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  const firstResponse = await dispatchRuntimeMessage(listener, {
+    type: "SAVE_MACRO",
+    name: "기본 흐름",
+    steps: [
+      {
+        type: "click",
+        selector: "#first",
+        label: "첫 버튼"
+      }
+    ]
+  });
+
+  assert.equal(firstResponse.ok, true);
+  assert.equal(firstResponse.savedMacros.length, 1);
+  assert.equal(firstResponse.savedMacros[0].name, "기본 흐름");
+
+  const secondResponse = await dispatchRuntimeMessage(listener, {
+    type: "SAVE_MACRO",
+    name: "기본 흐름",
+    steps: [
+      {
+        type: "click",
+        selector: "#second",
+        label: "둘째 버튼"
+      }
+    ]
+  });
+
+  assert.equal(secondResponse.ok, true);
+  assert.equal(secondResponse.savedMacros.length, 1);
+  assert.deepEqual(normalize(secondResponse.savedMacros[0].steps), [
+    {
+      type: "click",
+      selector: "#second",
+      label: "둘째 버튼"
+    }
+  ]);
+});
+
+test("continueMacroRun repeats the full macro for the requested repeat count", async () => {
+  const harness = loadBackgroundHarness();
+  let runSingleStepCalls = 0;
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#runBtn",
+        label: "실행"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null,
+    repeatTotal: 2,
+    repeatRemaining: 2,
+    repeatDelayMs: 0,
+    iteration: 1
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(runSingleStepCalls, 2);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료 (2회 반복)");
+});
+
+test("STOP_MACRO_RUN clears the current run state", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    currentTabId: 1,
+    steps: [
+      {
+        type: "click",
+        selector: "#runBtn"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "실행 중",
+    error: ""
+  };
+
+  const response = await dispatchRuntimeMessage(listener, {
+    type: "STOP_MACRO_RUN"
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.run.running, false);
+  assert.equal(response.run.lastMessage, "사용자가 매크로 실행을 중지했습니다.");
+});

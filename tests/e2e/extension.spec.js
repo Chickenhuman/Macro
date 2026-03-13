@@ -887,6 +887,7 @@ async function readStorage(extensionPage) {
   return await extensionPage.evaluate(async () => {
     return await chrome.storage.local.get([
       "macroSteps",
+      "savedMacros",
       "macroRecordingState",
       "macroRunState",
       "macroErrorLogs"
@@ -1476,5 +1477,72 @@ test.describe("extension smoke tests", () => {
         return await runPage.textContent("#result");
       })
       .toBe("applied");
+  });
+
+  test("saves and reloads named macros from the popup UI", async () => {
+    const steps = [
+      {
+        type: "click",
+        selector: "#openPopupBtn",
+        label: "팝업 열기"
+      },
+      {
+        type: "wait",
+        ms: 1000
+      }
+    ];
+
+    const setResponse = await sendRuntimeMessage(extensionPage, {
+      type: "SET_STEPS",
+      steps
+    });
+    expect(setResponse.ok).toBe(true);
+
+    await extensionPage.fill("#macroNameInput", "기본 저장");
+    await extensionPage.click("#saveMacroBtn");
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return (storage.savedMacros || []).length;
+      })
+      .toBe(1);
+
+    await extensionPage.click("#clearBtn");
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return (storage.macroSteps || []).length;
+      })
+      .toBe(0);
+
+    await extensionPage.selectOption("#savedMacroSelect", { label: "기본 저장" });
+    await extensionPage.click("#loadMacroBtn");
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return (storage.macroSteps || []).map((step) => ({
+          type: step.type,
+          selector: step.selector || "",
+          label: step.label || "",
+          ms: step.ms || 0
+        }));
+      })
+      .toEqual([
+        {
+          type: "click",
+          selector: "#openPopupBtn",
+          label: "팝업 열기",
+          ms: 0
+        },
+        {
+          type: "wait",
+          selector: "",
+          label: "",
+          ms: 1000
+        }
+      ]);
   });
 });

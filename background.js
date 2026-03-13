@@ -1,4 +1,5 @@
 const STEPS_KEY = "macroSteps";
+const SAVED_MACROS_KEY = "savedMacros";
 const RECORDING_KEY = "macroRecordingState";
 const RUN_KEY = "macroRunState";
 const ERROR_LOGS_KEY = "macroErrorLogs";
@@ -40,7 +41,11 @@ const DEFAULT_RUN_STATE = {
   knownTabIdsAtWaitStart: [],
   activeStepIndex: -1,
   activeStepType: "",
-  activeStepTabId: null
+  activeStepTabId: null,
+  repeatTotal: 1,
+  repeatRemaining: 1,
+  repeatDelayMs: 0,
+  iteration: 1
 };
 
 const DEFAULT_DEBUG_STATE = {
@@ -144,10 +149,125 @@ async function getSteps() {
   return Array.isArray(data[STEPS_KEY]) ? data[STEPS_KEY] : [];
 }
 
+function createSavedMacroId() {
+  return `macro-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 async function setSteps(steps) {
   await chrome.storage.local.set({
     [STEPS_KEY]: Array.isArray(steps) ? steps : []
   });
+}
+
+function sanitizeSavedMacro(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const name = String(entry.name || "").trim();
+  if (!name) {
+    return null;
+  }
+
+  const steps = Array.isArray(entry.steps) ? entry.steps.map(sanitizeStep).filter(Boolean) : [];
+  if (!steps.length) {
+    return null;
+  }
+
+  const createdAt =
+    typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt)
+      ? entry.createdAt
+      : Date.now();
+  const updatedAt =
+    typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
+      ? entry.updatedAt
+      : createdAt;
+
+  return {
+    id: String(entry.id || createSavedMacroId()),
+    name,
+    steps,
+    createdAt,
+    updatedAt
+  };
+}
+
+function sortSavedMacros(entries) {
+  return [...entries].sort((a, b) => {
+    if (b.updatedAt !== a.updatedAt) {
+      return b.updatedAt - a.updatedAt;
+    }
+
+    return a.name.localeCompare(b.name, "ko");
+  });
+}
+
+async function getSavedMacros() {
+  const data = await chrome.storage.local.get(SAVED_MACROS_KEY);
+  const normalized = Array.isArray(data[SAVED_MACROS_KEY])
+    ? data[SAVED_MACROS_KEY].map(sanitizeSavedMacro).filter(Boolean)
+    : [];
+
+  return sortSavedMacros(normalized);
+}
+
+async function setSavedMacros(entries) {
+  const normalized = sortSavedMacros((entries || []).map(sanitizeSavedMacro).filter(Boolean));
+  await chrome.storage.local.set({
+    [SAVED_MACROS_KEY]: normalized
+  });
+
+  return normalized;
+}
+
+async function saveMacro(name, steps) {
+  const trimmedName = String(name || "").trim();
+  if (!trimmedName) {
+    throw new Error("저장할 매크로 이름을 입력하세요.");
+  }
+
+  const sanitizedSteps = Array.isArray(steps) ? steps.map(sanitizeStep).filter(Boolean) : [];
+  if (!sanitizedSteps.length) {
+    throw new Error("저장할 step이 없습니다.");
+  }
+
+  const current = await getSavedMacros();
+  const existing = current.find((item) => item.name === trimmedName);
+  const now = Date.now();
+
+  const nextEntry = sanitizeSavedMacro({
+    id: existing?.id || createSavedMacroId(),
+    name: trimmedName,
+    steps: sanitizedSteps,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now
+  });
+
+  const next = existing
+    ? current.map((item) => (item.id === existing.id ? nextEntry : item))
+    : [...current, nextEntry];
+
+  const savedMacros = await setSavedMacros(next);
+  return {
+    savedMacros,
+    savedMacro: savedMacros.find((item) => item.id === nextEntry.id) || nextEntry
+  };
+}
+
+async function deleteSavedMacro(macroId) {
+  const targetId = String(macroId || "").trim();
+  if (!targetId) {
+    throw new Error("삭제할 매크로를 찾지 못했습니다.");
+  }
+
+  const current = await getSavedMacros();
+  const next = current.filter((item) => item.id !== targetId);
+
+  if (next.length === current.length) {
+    throw new Error("삭제할 매크로를 찾지 못했습니다.");
+  }
+
+  return await setSavedMacros(next);
 }
 
 async function getRecordingState() {
@@ -296,6 +416,18 @@ async function setRunState(state) {
   nextState.currentTabTrail = uniqTabIds(nextState.currentTabTrail);
   nextState.pendingPopupTabIds = uniqTabIds(nextState.pendingPopupTabIds);
   nextState.knownTabIdsAtWaitStart = uniqTabIds(nextState.knownTabIdsAtWaitStart);
+  nextState.repeatTotal =
+    Number.isInteger(nextState.repeatTotal) && nextState.repeatTotal > 0 ? nextState.repeatTotal : 1;
+  nextState.repeatRemaining =
+    Number.isInteger(nextState.repeatRemaining) && nextState.repeatRemaining > 0
+      ? nextState.repeatRemaining
+      : nextState.repeatTotal;
+  nextState.repeatDelayMs =
+    typeof nextState.repeatDelayMs === "number" && nextState.repeatDelayMs >= 0
+      ? nextState.repeatDelayMs
+      : 0;
+  nextState.iteration =
+    Number.isInteger(nextState.iteration) && nextState.iteration > 0 ? nextState.iteration : 1;
 
   if (!nextState.running) {
     nextState.rootTabId = null;
@@ -315,6 +447,10 @@ async function setRunState(state) {
     nextState.activeStepIndex = -1;
     nextState.activeStepType = "";
     nextState.activeStepTabId = null;
+    nextState.repeatTotal = 1;
+    nextState.repeatRemaining = 1;
+    nextState.repeatDelayMs = 0;
+    nextState.iteration = 1;
   }
 
   await chrome.storage.local.set({
@@ -630,6 +766,15 @@ async function finishRun(message) {
   });
 }
 
+async function stopRun(message) {
+  await clearPopupWaitAlarm();
+  return await setRunState({
+    running: false,
+    lastMessage: message || "실행 중지됨",
+    error: ""
+  });
+}
+
 async function attachRecordingToExistingRelatedTabs(rootTabId) {
   if (!isFiniteTabId(rootTabId)) {
     return await getRecordingState();
@@ -926,6 +1071,45 @@ async function handleWaitForPopupStep(runState, step) {
   });
 }
 
+async function restartMacroRunIteration(runState) {
+  if (!isFiniteTabId(runState.rootTabId)) {
+    throw new Error("반복 실행을 시작할 기준 탭을 찾을 수 없습니다.");
+  }
+
+  if (runState.repeatDelayMs > 0) {
+    await delay(runState.repeatDelayMs);
+  }
+
+  const rootTab = await chrome.tabs.get(runState.rootTabId);
+  if (!rootTab || isRestrictedUrl(rootTab.url || "")) {
+    throw new Error("반복 실행 기준 탭을 다시 사용할 수 없습니다.");
+  }
+
+  await ensureContentReady(runState.rootTabId);
+
+  const nextIteration = (runState.iteration || 1) + 1;
+
+  return await setRunState({
+    ...runState,
+    currentTabId: runState.rootTabId,
+    currentTabTrail: [],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: `반복 실행 ${nextIteration}/${runState.repeatTotal} 시작`,
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null,
+    repeatRemaining: Math.max(1, runState.repeatRemaining - 1),
+    iteration: nextIteration
+  });
+}
+
 async function continueMacroRun(passedState) {
   let runState = passedState || (await getRunState());
 
@@ -935,7 +1119,19 @@ async function continueMacroRun(passedState) {
 
   while (runState.running && !runState.waitingForPopup) {
     if (runState.stepIndex >= runState.steps.length) {
-      await finishRun("실행 완료");
+      if (runState.repeatRemaining > 1) {
+        try {
+          runState = await restartMacroRunIteration(runState);
+          continue;
+        } catch (error) {
+          await failRun(error?.message || String(error));
+          return;
+        }
+      }
+
+      await finishRun(
+        runState.repeatTotal > 1 ? `실행 완료 (${runState.repeatTotal}회 반복)` : "실행 완료"
+      );
       return;
     }
 
@@ -1101,6 +1297,7 @@ async function handleRunRelatedTab(tabId, tab) {
 chrome.runtime.onInstalled.addListener(async () => {
   const data = await chrome.storage.local.get([
     STEPS_KEY,
+    SAVED_MACROS_KEY,
     RECORDING_KEY,
     RUN_KEY,
     ERROR_LOGS_KEY,
@@ -1110,6 +1307,10 @@ chrome.runtime.onInstalled.addListener(async () => {
 
   if (!Array.isArray(data[STEPS_KEY])) {
     await setSteps([]);
+  }
+
+  if (!Array.isArray(data[SAVED_MACROS_KEY])) {
+    await setSavedMacros([]);
   }
 
   if (!data[RECORDING_KEY]) {
@@ -1262,8 +1463,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       switch (message?.type) {
         case "GET_DATA": {
-          const [steps, recording, runState, errorLogs, debug, debugLogs] = await Promise.all([
+          const [steps, savedMacros, recording, runState, errorLogs, debug, debugLogs] = await Promise.all([
             getSteps(),
+            getSavedMacros(),
             getRecordingState(),
             getRunState(),
             getErrorLogs(),
@@ -1274,6 +1476,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({
             ok: true,
             steps,
+            savedMacros,
             recording,
             run: runState,
             errorLogs,
@@ -1365,6 +1568,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const tabId = Number(message.tabId);
           const steps = Array.isArray(message.steps) ? message.steps : [];
           const sanitized = steps.map(sanitizeStep).filter(Boolean);
+          const currentRun = await getRunState();
+          const repeatCount =
+            Number.isInteger(Number(message.repeatCount)) && Number(message.repeatCount) > 0
+              ? Number(message.repeatCount)
+              : 1;
+          const repeatDelayMs =
+            typeof message.repeatDelayMs === "number" && message.repeatDelayMs >= 0
+              ? message.repeatDelayMs
+              : 800;
+
+          if (currentRun.running) {
+            throw new Error("이미 매크로를 실행 중입니다.");
+          }
 
           if (!isFiniteTabId(tabId)) {
             throw new Error("실행할 탭을 찾을 수 없습니다.");
@@ -1398,7 +1614,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             lastMessage: "매크로 실행 시작",
             error: "",
             pendingPopupTabIds: [],
-            knownTabIdsAtWaitStart: []
+            knownTabIdsAtWaitStart: [],
+            repeatTotal: repeatCount,
+            repeatRemaining: repeatCount,
+            repeatDelayMs,
+            iteration: 1
           });
 
           continueMacroRun().catch(async (error) => {
@@ -1407,7 +1627,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           sendResponse({
             ok: true,
-            message: "백그라운드에서 매크로 실행을 시작했습니다."
+            message:
+              repeatCount > 1
+                ? `백그라운드에서 매크로 실행을 ${repeatCount}회 시작했습니다.`
+                : "백그라운드에서 매크로 실행을 시작했습니다."
+          });
+          return;
+        }
+
+        case "STOP_MACRO_RUN": {
+          const runState = await getRunState();
+          const nextRunState = runState.running
+            ? await stopRun("사용자가 매크로 실행을 중지했습니다.")
+            : await getRunState();
+
+          sendResponse({
+            ok: true,
+            run: nextRunState,
+            message: nextRunState.lastMessage || "실행 중지됨"
           });
           return;
         }
@@ -1460,6 +1697,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({
             ok: true,
             steps: []
+          });
+          return;
+        }
+
+        case "SAVE_MACRO": {
+          const result = await saveMacro(message.name, message.steps);
+
+          sendResponse({
+            ok: true,
+            savedMacros: result.savedMacros,
+            savedMacro: result.savedMacro
+          });
+          return;
+        }
+
+        case "DELETE_SAVED_MACRO": {
+          const savedMacros = await deleteSavedMacro(message.id);
+
+          sendResponse({
+            ok: true,
+            savedMacros
           });
           return;
         }

@@ -678,6 +678,11 @@ function isRetryableTabMessageError(error) {
   );
 }
 
+function isMissingTabError(error) {
+  const message = String(error?.message || error || "");
+  return message.includes("No tab with id");
+}
+
 async function sendTabMessageWithReconnect(tabId, message, retries = 4) {
   let lastError = null;
 
@@ -1251,7 +1256,31 @@ async function continueMacroRun(passedState) {
         knownTabIdsAtWaitStart
       });
 
-      const tab = await chrome.tabs.get(runState.currentTabId);
+      let tab;
+      try {
+        tab = await chrome.tabs.get(runState.currentTabId);
+      } catch (error) {
+        if (isMissingTabError(error)) {
+          const restoredState = await restoreRunToPreviousTab(runState, runState.currentTabId);
+          if (restoredState?.running) {
+            runState = restoredState;
+            continue;
+          }
+          return;
+        }
+
+        throw error;
+      }
+
+      if (!tab) {
+        const restoredState = await restoreRunToPreviousTab(runState, runState.currentTabId);
+        if (restoredState?.running) {
+          runState = restoredState;
+          continue;
+        }
+        return;
+      }
+
       if (isRestrictedUrl(tab.url || "")) {
         throw new Error("현재 실행 탭은 확장 실행이 허용되지 않는 페이지입니다.");
       }
@@ -1297,6 +1326,15 @@ async function continueMacroRun(passedState) {
         activeStepTabId: null
       });
     } catch (error) {
+      if (isMissingTabError(error)) {
+        const restoredState = await restoreRunToPreviousTab(runState, runState.currentTabId);
+        if (restoredState?.running) {
+          runState = restoredState;
+          continue;
+        }
+        return;
+      }
+
       if (isRetryableTabMessageError(error) && step.type === "click") {
         await delay(250);
         const latestRunState = await getRunState();

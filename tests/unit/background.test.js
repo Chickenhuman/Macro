@@ -95,7 +95,11 @@ function loadBackgroundHarness() {
     },
     tabs: {
       async get(tabId) {
-        return tabs.get(tabId);
+        const tab = tabs.get(tabId);
+        if (!tab) {
+          throw new Error(`No tab with id: ${tabId}.`);
+        }
+        return tab;
       },
       async query() {
         return [...tabs.values()];
@@ -235,6 +239,56 @@ test("advances an in-flight click step when the popup tab closes before the cont
   assert.equal(continuedState.activeStepIndex, -1);
   assert.equal(continuedState.activeStepType, "");
   assert.equal(continuedState.activeStepTabId, null);
+});
+
+test("restores to the previous tab when the current run tab is already missing", async () => {
+  const harness = loadBackgroundHarness();
+  let sentToTabId = null;
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "RUN_SINGLE_STEP") {
+      sentToTabId = tabId;
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 2,
+    currentTabTrail: [1],
+    steps: [
+      {
+        type: "click",
+        selector: "#btnConfirmD",
+        label: "확인"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 중",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(sentToTabId, 1);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
 });
 
 test("SAVE_MACRO stores and overwrites saved macros by name", async () => {

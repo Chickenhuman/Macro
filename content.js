@@ -1720,10 +1720,18 @@
     el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   }
 
-  function prefersDirectClick(el) {
+  function isNativeDirectClickElement(el) {
     if (!(el instanceof Element)) return false;
 
-    if (!el.matches("button, input[type='button'], input[type='submit'], input[type='reset']")) {
+    return el.matches("button, input[type='button'], input[type='submit'], input[type='reset']");
+  }
+
+  function prefersDirectClick(el) {
+    return isNativeDirectClickElement(el);
+  }
+
+  function prefersMainWorldDirectClick(el) {
+    if (!isNativeDirectClickElement(el)) {
       return false;
     }
 
@@ -2114,7 +2122,7 @@
 
     await delay(250);
 
-    if (prefersDirectClick(el) && typeof el.click === "function") {
+    if (prefersMainWorldDirectClick(el) && typeof el.click === "function") {
       const clickedInMainWorld = await clickInMainWorld(step, el);
       if (clickedInMainWorld) {
         return;

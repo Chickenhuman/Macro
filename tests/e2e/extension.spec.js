@@ -812,6 +812,38 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/synthetic-mousedown-sensitive.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Synthetic Mousedown Sensitive",
+          `
+            <button id="btnConfirmD" type="button" class="submit">확인</button>
+            <div id="result">idle</div>
+          `,
+          `
+            const button = document.querySelector("#btnConfirmD");
+            const result = document.querySelector("#result");
+
+            button.addEventListener("mousedown", (event) => {
+              if (!event.isTrusted) {
+                result.textContent = "system-error";
+              }
+            });
+
+            button.addEventListener("click", () => {
+              if (result.textContent === "system-error") {
+                return;
+              }
+
+              result.textContent = "applied";
+            });
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/pudd-dropdown.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -1897,6 +1929,35 @@ test.describe("extension smoke tests", () => {
         type: "click",
         selector: "#set_apprv",
         label: "반영"
+      }
+    ];
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        return await runPage.textContent("#result");
+      })
+      .toBe("applied");
+  });
+
+  test("uses direct click for native buttons without firing synthetic mousedown first", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/synthetic-mousedown-sensitive.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const steps = [
+      {
+        type: "click",
+        selector: "#btnConfirmD",
+        label: "확인"
       }
     ];
 

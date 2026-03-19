@@ -878,6 +878,16 @@ function scoreRunFrameHintCandidate(candidate, preferredFrameId = 0) {
     score += 10;
   }
 
+  const frameName = String(candidate.hint?.frameName || "").toLowerCase();
+  const frameIdAttr = String(candidate.hint?.frameIdAttr || "").toLowerCase();
+  if (frameName === "_content" || frameIdAttr === "_content") {
+    score += 40;
+  }
+
+  if (candidate.hint?.locationHref) {
+    score += 15;
+  }
+
   return score;
 }
 
@@ -965,8 +975,25 @@ async function resolveRunStepFrame(tabId, step, preferredFrameId = 0) {
       const childFrameHints = Array.isArray(entry?.response?.detail?.childFrameHints)
         ? entry.response.detail.childFrameHints
         : [];
+      const topLevelFrameHints = Array.isArray(entry?.response?.detail?.topLevelFrameHints)
+        ? entry.response.detail.topLevelFrameHints
+        : [];
 
       for (const hint of childFrameHints) {
+        const matchedFrame = matchRunFrameHintToFrame(hint, frameInfos);
+        if (!matchedFrame || hintedFrameIds.has(matchedFrame.frameId)) {
+          continue;
+        }
+
+        hintedFrameIds.add(matchedFrame.frameId);
+        hintedCandidates.push({
+          frameId: matchedFrame.frameId,
+          hint,
+          sourceFrameId: normalizeResolvedFrameId(entry?.frameId, fallbackFrameId)
+        });
+      }
+
+      for (const hint of topLevelFrameHints) {
         const matchedFrame = matchRunFrameHintToFrame(hint, frameInfos);
         if (!matchedFrame || hintedFrameIds.has(matchedFrame.frameId)) {
           continue;
@@ -1017,6 +1044,28 @@ async function resolveRunStepFrame(tabId, step, preferredFrameId = 0) {
             topLevel: true
           },
           sourceFrameId: normalizeResolvedFrameId(entry?.frameId, fallbackFrameId)
+        });
+      }
+    }
+
+    if (!hintedCandidates.length) {
+      const directChildFrames = frameInfos.filter(
+        (frame) => frame.frameId !== 0 && normalizeResolvedFrameId(frame.parentFrameId, 0) === 0
+      );
+
+      if (directChildFrames.length === 1) {
+        hintedCandidates.push({
+          frameId: directChildFrames[0].frameId,
+          hint: {
+            frameIdAttr: "",
+            frameName: "",
+            frameSrc: "",
+            locationHref: directChildFrames[0].url || "",
+            active: false,
+            visible: true,
+            topLevel: true
+          },
+          sourceFrameId: fallbackFrameId
         });
       }
     }

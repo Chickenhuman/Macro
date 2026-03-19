@@ -352,6 +352,40 @@
     };
   }
 
+  function collectTopLevelFrameHints(limit = 10) {
+    const hints = [];
+    const seen = new Set();
+
+    for (const frameElement of document.querySelectorAll("iframe, frame")) {
+      const hint = buildFrameHint(frameElement, {
+        active: document.activeElement === frameElement,
+        topLevel: true
+      });
+
+      if (!hint) {
+        continue;
+      }
+
+      const key = JSON.stringify([
+        hint.frameIdAttr || "",
+        hint.frameName || "",
+        hint.locationHref || "",
+        hint.frameSrc || ""
+      ]);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+
+      hints.push(hint);
+      if (hints.length >= limit) {
+        break;
+      }
+    }
+
+    return hints;
+  }
+
   function collectChildFrameHintsForSelector(selector, rootWindow = window, depth = 0, results = [], visited = new Set()) {
     if (!selector || depth > 4) {
       return results;
@@ -506,6 +540,7 @@
       activeElement: summarizeTraceElement(activeElement),
       activeFrameHint,
       frameElement: summarizeTraceElement(getFrameElementForTrace()),
+      topLevelFrameHints: window.top === window ? collectTopLevelFrameHints() : [],
       selectorTrace: step?.selector ? collectSelectorTrace(step.selector, selectorLimit) : null
     };
   }

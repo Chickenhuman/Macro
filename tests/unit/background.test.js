@@ -1114,6 +1114,141 @@ test("continueMacroRun uses descendant frame hints when the selector lives insid
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
 });
 
+test("continueMacroRun follows the active iframe hint when the top frame has focus on iframe#_content", async () => {
+  const harness = loadBackgroundHarness();
+  const runStepFrames = [];
+
+  harness.tabs.set(1, {
+    id: 1,
+    url: "https://example.com/gw/bizbox.do",
+    windowId: 10,
+    status: "complete"
+  });
+  harness.frameIdsByTab.set(1, [
+    {
+      frameId: 0,
+      parentFrameId: -1,
+      url: "https://example.com/gw/bizbox.do"
+    },
+    {
+      frameId: 1,
+      parentFrameId: 0,
+      url: "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do"
+    }
+  ]);
+
+  harness.chrome.tabs.sendMessage = async (tabId, message, options = {}) => {
+    const frameId = options?.frameId;
+
+    if (message.type === "PING") {
+      return {
+        ok: true
+      };
+    }
+
+    if (message.type === "LOCATE_RUN_STEP_TARGET") {
+      if (frameId === 0) {
+        return {
+          ok: true,
+          canRun: false,
+          score: -1,
+          detail: {
+            locationHref: "https://example.com/gw/bizbox.do",
+            documentHasFocus: false,
+            activeElement: {
+              tag: "iframe",
+              id: "_content",
+              name: "_content",
+              selector: "#_content",
+              visible: true
+            },
+            activeFrameHint: {
+              frameIdAttr: "_content",
+              frameName: "_content",
+              frameSrc: "",
+              locationHref:
+                "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do",
+              visible: true,
+              active: true,
+              topLevel: true
+            },
+            selectorTrace: {
+              selector: message.step?.selector || "",
+              count: 0
+            }
+          },
+          target: null
+        };
+      }
+
+      return {
+        ok: true,
+        canRun: false,
+        score: -1,
+        detail: {
+          locationHref:
+            "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do",
+          documentHasFocus: true,
+          activeElement: null,
+          selectorTrace: {
+            selector: message.step?.selector || "",
+            count: 0
+          }
+        },
+        target: null
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runStepFrames.push(frameId);
+      return {
+        ok: true,
+        message: `[${message.index + 1}] step 완료`
+      };
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "td:nth-of-type(1) > div.PUDD.PUDD-COLOR-blue.PUDD-UI-checkbox",
+        label: "div"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.deepEqual(runStepFrames, [1]);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
 test("STOP_MACRO_RUN clears the current run state", async () => {
   const harness = loadBackgroundHarness();
   const listener = harness.registries.runtimeOnMessage.listeners[0];

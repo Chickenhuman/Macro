@@ -891,6 +891,7 @@ function summarizeRunFrameHintCandidateForTrace(candidate, preferredFrameId = 0)
     locationHref: candidate.hint?.locationHref || "",
     frameIdAttr: candidate.hint?.frameIdAttr || "",
     frameName: candidate.hint?.frameName || "",
+    frameSrc: candidate.hint?.frameSrc || "",
     active: !!candidate.hint?.active,
     visible: !!candidate.hint?.visible,
     topLevel: !!candidate.hint?.topLevel,
@@ -975,6 +976,46 @@ async function resolveRunStepFrame(tabId, step, preferredFrameId = 0) {
         hintedCandidates.push({
           frameId: matchedFrame.frameId,
           hint,
+          sourceFrameId: normalizeResolvedFrameId(entry?.frameId, fallbackFrameId)
+        });
+      }
+
+      const activeFrameHint = entry?.response?.detail?.activeFrameHint;
+      const matchedActiveFrame = matchRunFrameHintToFrame(activeFrameHint, frameInfos);
+      if (matchedActiveFrame && !hintedFrameIds.has(matchedActiveFrame.frameId)) {
+        hintedFrameIds.add(matchedActiveFrame.frameId);
+        hintedCandidates.push({
+          frameId: matchedActiveFrame.frameId,
+          hint: {
+            ...activeFrameHint,
+            active: true,
+            topLevel: true
+          },
+          sourceFrameId: normalizeResolvedFrameId(entry?.frameId, fallbackFrameId)
+        });
+      }
+
+      const activeElement = entry?.response?.detail?.activeElement;
+      const soleChildFrames = frameInfos.filter(
+        (frame) => frame.frameId !== 0 && normalizeResolvedFrameId(frame.parentFrameId, 0) === 0
+      );
+      if (
+        activeElement?.tag === "iframe" &&
+        soleChildFrames.length === 1 &&
+        !hintedFrameIds.has(soleChildFrames[0].frameId)
+      ) {
+        hintedFrameIds.add(soleChildFrames[0].frameId);
+        hintedCandidates.push({
+          frameId: soleChildFrames[0].frameId,
+          hint: {
+            frameIdAttr: activeElement.id || "",
+            frameName: activeElement.name || "",
+            frameSrc: "",
+            locationHref: soleChildFrames[0].url || "",
+            active: true,
+            visible: !!activeElement.visible,
+            topLevel: true
+          },
           sourceFrameId: normalizeResolvedFrameId(entry?.frameId, fallbackFrameId)
         });
       }

@@ -330,6 +330,28 @@
     };
   }
 
+  function buildFrameHint(frameElement, extra = {}) {
+    if (!(frameElement instanceof HTMLIFrameElement || frameElement instanceof HTMLFrameElement)) {
+      return null;
+    }
+
+    let locationHref = "";
+    try {
+      locationHref = String(frameElement.contentWindow?.location?.href || "");
+    } catch {
+      locationHref = "";
+    }
+
+    return {
+      frameIdAttr: frameElement.id || "",
+      frameName: frameElement.getAttribute("name") || "",
+      frameSrc: String(frameElement.getAttribute("src") || ""),
+      locationHref,
+      visible: isVisible(frameElement),
+      ...extra
+    };
+  }
+
   function collectChildFrameHintsForSelector(selector, rootWindow = window, depth = 0, results = [], visited = new Set()) {
     if (!selector || depth > 4) {
       return results;
@@ -388,15 +410,12 @@
       }
 
       if (hasMatch) {
-        results.push({
-          active: currentDocument.activeElement === frameElement,
-          frameIdAttr: frameElement.id || "",
-          frameName: frameElement.getAttribute("name") || "",
-          frameSrc: String(frameElement.getAttribute("src") || ""),
-          locationHref,
-          topLevel: depth === 0,
-          visible: isVisible(frameElement)
-        });
+        results.push(
+          buildFrameHint(frameElement, {
+            active: currentDocument.activeElement === frameElement,
+            topLevel: depth === 0
+          })
+        );
       }
 
       collectChildFrameHintsForSelector(selector, childWindow, depth + 1, results, visited);
@@ -474,11 +493,18 @@
   }
 
   function collectFrameContextTrace(step, selectorLimit = 5) {
+    const activeElement = document.activeElement;
+    const activeFrameHint = buildFrameHint(activeElement, {
+      active: true,
+      topLevel: window.top === window
+    });
+
     return {
       locationHref: location.href,
       topFrame: window.top === window,
       documentHasFocus: getDocumentHasFocus(),
-      activeElement: summarizeTraceElement(document.activeElement),
+      activeElement: summarizeTraceElement(activeElement),
+      activeFrameHint,
       frameElement: summarizeTraceElement(getFrameElementForTrace()),
       selectorTrace: step?.selector ? collectSelectorTrace(step.selector, selectorLimit) : null
     };

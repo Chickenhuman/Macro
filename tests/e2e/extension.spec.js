@@ -1830,6 +1830,11 @@ test.describe("extension smoke tests", () => {
     await rootPage.click("#openArchivePopup");
     const popupPage = await popupPromise;
     await popupPage.waitForLoadState("domcontentloaded");
+    await expect
+      .poll(async () => {
+        return await popupPage.evaluate(() => document.documentElement.innerText || "");
+      })
+      .toContain("매크로 기록 중");
 
     const popupClosed = popupPage.waitForEvent("close");
     await popupPage.click("#archiveOption");

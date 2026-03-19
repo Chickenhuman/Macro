@@ -704,27 +704,55 @@ async function sendTabMessageToFrame(tabId, message, frameId) {
   return await sendTabMessage(tabId, message);
 }
 
-async function getTabFrameIds(tabId) {
+async function getTabFrames(tabId) {
   if (!chrome.webNavigation?.getAllFrames) {
-    return [0];
+    return [
+      {
+        frameId: 0,
+        parentFrameId: null,
+        url: ""
+      }
+    ];
   }
 
   try {
     const frames = await chrome.webNavigation.getAllFrames({
       tabId
     });
-    const frameIds = Array.from(
-      new Set((frames || []).map((frame) => frame?.frameId).filter(isFiniteFrameId))
-    );
+    const byFrameId = new Map();
 
-    if (!frameIds.includes(0)) {
-      frameIds.unshift(0);
+    for (const frame of frames || []) {
+      if (!isFiniteFrameId(frame?.frameId)) continue;
+      byFrameId.set(frame.frameId, {
+        frameId: frame.frameId,
+        parentFrameId: isFiniteFrameId(frame?.parentFrameId) ? frame.parentFrameId : null,
+        url: String(frame?.url || "")
+      });
     }
 
-    return frameIds.length ? frameIds : [0];
+    if (!byFrameId.has(0)) {
+      byFrameId.set(0, {
+        frameId: 0,
+        parentFrameId: null,
+        url: ""
+      });
+    }
+
+    return [...byFrameId.values()].sort((a, b) => a.frameId - b.frameId);
   } catch {
-    return [0];
+    return [
+      {
+        frameId: 0,
+        parentFrameId: null,
+        url: ""
+      }
+    ];
   }
+}
+
+async function getTabFrameIds(tabId) {
+  const frames = await getTabFrames(tabId);
+  return frames.map((frame) => frame.frameId).filter(isFiniteFrameId);
 }
 
 async function broadcastTabMessage(tabId, message) {
@@ -829,6 +857,71 @@ function summarizeRunFrameCandidateForTrace(candidate, preferredFrameId = 0) {
   });
 }
 
+function scoreRunFrameHintCandidate(candidate, preferredFrameId = 0) {
+  if (!candidate) return -1;
+
+  let score = 120;
+
+  if (candidate.frameId === normalizeResolvedFrameId(preferredFrameId, 0)) {
+    score += 30;
+  }
+
+  if (candidate.hint?.active) {
+    score += 30;
+  }
+
+  if (candidate.hint?.visible) {
+    score += 20;
+  }
+
+  if (candidate.hint?.topLevel) {
+    score += 10;
+  }
+
+  return score;
+}
+
+function summarizeRunFrameHintCandidateForTrace(candidate, preferredFrameId = 0) {
+  if (!candidate) return null;
+
+  return sanitizeTraceData({
+    frameId: normalizeResolvedFrameId(candidate.frameId, preferredFrameId),
+    score: scoreRunFrameHintCandidate(candidate, preferredFrameId),
+    source: "descendant-frame-hint",
+    locationHref: candidate.hint?.locationHref || "",
+    frameIdAttr: candidate.hint?.frameIdAttr || "",
+    frameName: candidate.hint?.frameName || "",
+    active: !!candidate.hint?.active,
+    visible: !!candidate.hint?.visible,
+    topLevel: !!candidate.hint?.topLevel,
+    sourceFrameId: normalizeResolvedFrameId(candidate.sourceFrameId, 0)
+  });
+}
+
+function matchRunFrameHintToFrame(frameHint, frameInfos) {
+  if (!frameHint || !Array.isArray(frameInfos) || !frameInfos.length) {
+    return null;
+  }
+
+  const locationHref = String(frameHint.locationHref || "");
+  if (locationHref) {
+    const exactMatch = frameInfos.find((frame) => frame.frameId !== 0 && frame.url === locationHref);
+    if (exactMatch) {
+      return exactMatch;
+    }
+  }
+
+  const frameSrc = String(frameHint.frameSrc || "");
+  if (frameSrc) {
+    const srcMatch = frameInfos.find((frame) => frame.frameId !== 0 && frame.url === frameSrc);
+    if (srcMatch) {
+      return srcMatch;
+    }
+  }
+
+  return null;
+}
+
 async function resolveRunStepFrame(tabId, step, preferredFrameId = 0) {
   const fallbackFrameId = normalizeResolvedFrameId(preferredFrameId, 0);
 
@@ -840,6 +933,7 @@ async function resolveRunStepFrame(tabId, step, preferredFrameId = 0) {
     };
   }
 
+  const frameInfos = await getTabFrames(tabId);
   const responses = await broadcastTabMessage(tabId, {
     type: "LOCATE_RUN_STEP_TARGET",
     step
@@ -863,6 +957,51 @@ async function resolveRunStepFrame(tabId, step, preferredFrameId = 0) {
     });
 
   if (!candidates.length) {
+    const hintedCandidates = [];
+    const hintedFrameIds = new Set();
+
+    for (const entry of responses || []) {
+      const childFrameHints = Array.isArray(entry?.response?.detail?.childFrameHints)
+        ? entry.response.detail.childFrameHints
+        : [];
+
+      for (const hint of childFrameHints) {
+        const matchedFrame = matchRunFrameHintToFrame(hint, frameInfos);
+        if (!matchedFrame || hintedFrameIds.has(matchedFrame.frameId)) {
+          continue;
+        }
+
+        hintedFrameIds.add(matchedFrame.frameId);
+        hintedCandidates.push({
+          frameId: matchedFrame.frameId,
+          hint,
+          sourceFrameId: normalizeResolvedFrameId(entry?.frameId, fallbackFrameId)
+        });
+      }
+    }
+
+    if (hintedCandidates.length) {
+      hintedCandidates.sort((a, b) => {
+        const scoreDiff =
+          scoreRunFrameHintCandidate(b, fallbackFrameId) - scoreRunFrameHintCandidate(a, fallbackFrameId);
+        if (scoreDiff !== 0) {
+          return scoreDiff;
+        }
+
+        const aIsPreferred = a.frameId === fallbackFrameId ? 1 : 0;
+        const bIsPreferred = b.frameId === fallbackFrameId ? 1 : 0;
+        return bIsPreferred - aIsPreferred;
+      });
+
+      return {
+        frameId: hintedCandidates[0].frameId,
+        candidates: hintedCandidates.map((entry) =>
+          summarizeRunFrameHintCandidateForTrace(entry, fallbackFrameId)
+        ),
+        matched: true
+      };
+    }
+
     return {
       frameId: fallbackFrameId,
       candidates: [],

@@ -330,6 +330,81 @@
     };
   }
 
+  function collectChildFrameHintsForSelector(selector, rootWindow = window, depth = 0, results = [], visited = new Set()) {
+    if (!selector || depth > 4) {
+      return results;
+    }
+
+    let currentDocument = null;
+    try {
+      currentDocument = rootWindow.document;
+    } catch {
+      return results;
+    }
+
+    if (!currentDocument?.querySelectorAll) {
+      return results;
+    }
+
+    const frameElements = [...currentDocument.querySelectorAll("iframe, frame")];
+    const activeFrameElement =
+      currentDocument.activeElement instanceof HTMLIFrameElement ||
+      currentDocument.activeElement instanceof HTMLFrameElement
+        ? currentDocument.activeElement
+        : null;
+    const orderedFrames = activeFrameElement
+      ? [activeFrameElement, ...frameElements.filter((frame) => frame !== activeFrameElement)]
+      : frameElements;
+
+    for (const frameElement of orderedFrames) {
+      let childWindow = null;
+      let childDocument = null;
+
+      try {
+        childWindow = frameElement.contentWindow;
+        childDocument = childWindow?.document;
+        if (!childWindow || !childDocument || visited.has(childWindow)) {
+          continue;
+        }
+        void childDocument.querySelectorAll;
+      } catch {
+        continue;
+      }
+
+      visited.add(childWindow);
+
+      let locationHref = "";
+      try {
+        locationHref = String(childWindow.location?.href || "");
+      } catch {
+        locationHref = "";
+      }
+
+      let hasMatch = false;
+      try {
+        hasMatch = !!childDocument.querySelector(selector);
+      } catch {
+        hasMatch = false;
+      }
+
+      if (hasMatch) {
+        results.push({
+          active: currentDocument.activeElement === frameElement,
+          frameIdAttr: frameElement.id || "",
+          frameName: frameElement.getAttribute("name") || "",
+          frameSrc: String(frameElement.getAttribute("src") || ""),
+          locationHref,
+          topLevel: depth === 0,
+          visible: isVisible(frameElement)
+        });
+      }
+
+      collectChildFrameHintsForSelector(selector, childWindow, depth + 1, results, visited);
+    }
+
+    return results;
+  }
+
   function collectSelectorTrace(selector, limit = 5) {
     const cleanSelector = String(selector || "").trim();
     if (!cleanSelector) {
@@ -458,6 +533,9 @@
 
     if (!(raw instanceof Element)) {
       result.reason = "no-match";
+      if (window.top === window) {
+        result.detail.childFrameHints = collectChildFrameHintsForSelector(selector);
+      }
       return result;
     }
 

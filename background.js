@@ -16,6 +16,7 @@ const DEFAULT_RECORDING_STATE = {
   rootOrigin: "",
   rootHostname: "",
   startedAt: 0,
+  lastRecordedAt: 0,
   trackedTabIds: [],
   pendingPopupTabIds: [],
   knownTabIdsAtStart: [],
@@ -56,6 +57,11 @@ const DEFAULT_DEBUG_STATE = {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function roundRecordedDelay(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 400) return 0;
+  return Math.min(30000, Math.round(ms / 100) * 100);
 }
 
 function isFiniteTabId(value) {
@@ -346,6 +352,10 @@ async function setRecordingState(state) {
   nextState.pendingPopupTabIds = uniqTabIds(nextState.pendingPopupTabIds);
   nextState.knownTabIdsAtStart = uniqTabIds(nextState.knownTabIdsAtStart);
   nextState.popupStepRecordedTabIds = uniqTabIds(nextState.popupStepRecordedTabIds);
+  nextState.lastRecordedAt =
+    typeof nextState.lastRecordedAt === "number" && Number.isFinite(nextState.lastRecordedAt)
+      ? nextState.lastRecordedAt
+      : 0;
 
   if (!nextState.enabled) {
     nextState.initializing = false;
@@ -354,6 +364,7 @@ async function setRecordingState(state) {
     nextState.rootOrigin = "";
     nextState.rootHostname = "";
     nextState.startedAt = 0;
+    nextState.lastRecordedAt = 0;
     nextState.trackedTabIds = [];
     nextState.pendingPopupTabIds = [];
     nextState.knownTabIdsAtStart = [];
@@ -601,18 +612,47 @@ function sanitizeStep(step) {
   return clean;
 }
 
-async function appendSteps(newSteps) {
-  const currentSteps = await getSteps();
-  const nextSteps = [...currentSteps];
+async function appendSteps(newSteps, options = {}) {
+  const sanitized = (newSteps || []).map(sanitizeStep).filter(Boolean);
+  if (!sanitized.length) {
+    return await getSteps();
+  }
 
-  for (const step of newSteps || []) {
-    const clean = sanitizeStep(step);
-    if (clean) {
-      nextSteps.push(clean);
+  const [currentSteps, recording] = await Promise.all([getSteps(), getRecordingState()]);
+  const nextSteps = [...currentSteps];
+  const recordedAt =
+    typeof options.recordedAt === "number" && Number.isFinite(options.recordedAt)
+      ? options.recordedAt
+      : Date.now();
+  const previousRecordedAt =
+    typeof recording.lastRecordedAt === "number" && Number.isFinite(recording.lastRecordedAt)
+      ? recording.lastRecordedAt
+      : 0;
+
+  const hasRecordedAction = sanitized.some((step) => step.type !== "wait");
+  const startsWithWait = sanitized[0]?.type === "wait";
+
+  if (recording.enabled && previousRecordedAt > 0 && hasRecordedAction && !startsWithWait) {
+    const gap = roundRecordedDelay(recordedAt - previousRecordedAt);
+    if (gap > 0) {
+      nextSteps.push({
+        type: "wait",
+        ms: gap
+      });
     }
   }
 
+  nextSteps.push(...sanitized);
+
   await setSteps(nextSteps);
+
+  if (recording.enabled && hasRecordedAction) {
+    await setRecordingState({
+      ...recording,
+      lastRecordedAt: recordedAt
+    });
+  }
+
   return nextSteps;
 }
 
@@ -2800,7 +2840,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case "APPEND_STEPS": {
           const steps = Array.isArray(message.steps) ? message.steps : [];
-          const nextSteps = await appendSteps(steps);
+          const nextSteps = await appendSteps(steps, {
+            recordedAt:
+              typeof message.recordedAt === "number" && Number.isFinite(message.recordedAt)
+                ? message.recordedAt
+                : Date.now()
+          });
 
           sendResponse({
             ok: true,

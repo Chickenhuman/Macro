@@ -16,6 +16,7 @@
   let recordingFrameRefreshTimer = null;
   const observedRecordingFrames = new WeakSet();
   const STEPS_KEY = "macroSteps";
+  const RECORDING_KEY = "macroRecordingState";
   const RECORD_STATE_EVENT_TYPE = "__EASY_WEB_MACRO_RECORD_STATE__";
   const FRAME_READY_EVENT_TYPE = "__EASY_WEB_MACRO_FRAME_READY__";
 
@@ -1240,33 +1241,77 @@
     return true;
   }
 
-  async function appendRecordedStepsDirectly(steps) {
+  async function appendRecordedStepsDirectly(steps, options = {}) {
     const sanitized = sanitizeRecordedSteps(steps);
     if (!sanitized.length) return [];
 
-    const data = await chrome.storage.local.get(STEPS_KEY);
+    const data = await chrome.storage.local.get([STEPS_KEY, RECORDING_KEY]);
     const currentSteps = Array.isArray(data[STEPS_KEY]) ? data[STEPS_KEY] : [];
+    const recording =
+      data[RECORDING_KEY] && typeof data[RECORDING_KEY] === "object" ? data[RECORDING_KEY] : {};
 
     if (hasMatchingTail(currentSteps, sanitized)) {
       return currentSteps;
     }
 
-    const nextSteps = [...currentSteps, ...sanitized];
-    await chrome.storage.local.set({
-      [STEPS_KEY]: nextSteps
-    });
+    const nextSteps = [...currentSteps];
+    const recordedAt =
+      typeof options.recordedAt === "number" && Number.isFinite(options.recordedAt)
+        ? options.recordedAt
+        : Date.now();
+    const previousRecordedAt =
+      typeof recording.lastRecordedAt === "number" && Number.isFinite(recording.lastRecordedAt)
+        ? recording.lastRecordedAt
+        : 0;
+    const hasRecordedAction = sanitized.some((step) => step.type !== "wait");
+    const startsWithWait = sanitized[0]?.type === "wait";
+
+    if (recording.enabled && previousRecordedAt > 0 && hasRecordedAction && !startsWithWait) {
+      const gap = roundDelay(recordedAt - previousRecordedAt);
+      if (gap > 0) {
+        nextSteps.push({
+          type: "wait",
+          ms: gap
+        });
+      }
+    }
+
+    nextSteps.push(...sanitized);
+
+    const nextRecording =
+      recording.enabled && hasRecordedAction
+        ? {
+            ...recording,
+            lastRecordedAt: recordedAt
+          }
+        : null;
+
+    await chrome.storage.local.set(
+      nextRecording
+        ? {
+            [STEPS_KEY]: nextSteps,
+            [RECORDING_KEY]: nextRecording
+          }
+        : {
+            [STEPS_KEY]: nextSteps
+          }
+    );
 
     return nextSteps;
   }
 
-  async function persistRecordedSteps(steps) {
+  async function persistRecordedSteps(steps, options = {}) {
     const sanitized = sanitizeRecordedSteps(steps);
     if (!sanitized.length) return [];
 
     try {
       const response = await chrome.runtime.sendMessage({
         type: "APPEND_STEPS",
-        steps: sanitized
+        steps: sanitized,
+        recordedAt:
+          typeof options.recordedAt === "number" && Number.isFinite(options.recordedAt)
+            ? options.recordedAt
+            : Date.now()
       });
 
       if (!response?.ok) {
@@ -1279,7 +1324,7 @@
         throw error;
       }
 
-      return await appendRecordedStepsDirectly(sanitized);
+      return await appendRecordedStepsDirectly(sanitized, options);
     }
   }
 
@@ -1300,7 +1345,9 @@
     }
 
     stepsToAppend.push(step);
-    await persistRecordedSteps(stepsToAppend);
+    await persistRecordedSteps(stepsToAppend, {
+      recordedAt: now
+    });
     lastRecordedAt = now;
 
     appendDebugLog({

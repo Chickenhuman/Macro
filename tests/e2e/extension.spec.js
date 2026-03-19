@@ -1175,7 +1175,8 @@ test.describe("extension smoke tests", () => {
         return await frame.locator("html").textContent();
       })
       .toContain("매크로 기록 중");
-    await frame.locator("#signPassword").fill("1358314a!");
+    await page.waitForTimeout(650);
+    await frame.locator("#signPassword").fill("TestPass!1");
     await frame.locator("#signPassword").blur();
     await frame.locator("#closeFocus").click();
 
@@ -1186,7 +1187,7 @@ test.describe("extension smoke tests", () => {
           (step) =>
             step.type === "input" &&
             step.selector === "#signPassword" &&
-            step.value === "1358314a!"
+            step.value === "TestPass!1"
         );
       })
       .toBe(true);
@@ -1198,6 +1199,17 @@ test.describe("extension smoke tests", () => {
 
     const storage = await readStorage(extensionPage);
     const steps = storage.macroSteps || [];
+    const openDialogIndex = steps.findIndex(
+      (step) => step.type === "click" && step.selector === "#openPasswordDialog"
+    );
+    const passwordIndex = steps.findIndex(
+      (step) =>
+        step.type === "input" && step.selector === "#signPassword" && step.value === "TestPass!1"
+    );
+    const waitBetweenSteps =
+      openDialogIndex >= 0 && passwordIndex > openDialogIndex
+        ? steps.slice(openDialogIndex + 1, passwordIndex).find((step) => step.type === "wait")
+        : null;
 
     expect(steps.some((step) => step.type === "click" && step.selector === "#openPasswordDialog")).toBe(
       true
@@ -1207,9 +1219,10 @@ test.describe("extension smoke tests", () => {
         (step) =>
           step.type === "input" &&
           step.selector === "#signPassword" &&
-          step.value === "1358314a!"
+          step.value === "TestPass!1"
       )
     ).toBe(true);
+    expect(waitBetweenSteps?.ms).toBeGreaterThanOrEqual(600);
   });
 
   test("runs click, wait, input, and click steps inside a dynamically added iframe", async () => {
@@ -1232,7 +1245,7 @@ test.describe("extension smoke tests", () => {
       {
         type: "input",
         selector: "#signPassword",
-        value: "1358314a!",
+        value: "TestPass!1",
         label: "비밀번호"
       },
       {
@@ -1256,7 +1269,7 @@ test.describe("extension smoke tests", () => {
       .poll(async () => {
         return await frame.locator("#signPassword").inputValue();
       })
-      .toBe("1358314a!");
+      .toBe("TestPass!1");
 
     await expect
       .poll(async () => {

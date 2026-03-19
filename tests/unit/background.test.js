@@ -186,11 +186,87 @@ test("START_RECORDING resets recording state and returns an error when root tab 
     rootOrigin: "",
     rootHostname: "",
     startedAt: 0,
+    lastRecordedAt: 0,
     trackedTabIds: [],
     pendingPopupTabIds: [],
     knownTabIdsAtStart: [],
     popupStepRecordedTabIds: []
   });
+});
+
+test("APPEND_STEPS carries over recorded wait gaps across frame transitions without adding an initial wait", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  harness.storage.macroRecordingState = {
+    enabled: true,
+    initializing: false,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    startedAt: 100,
+    lastRecordedAt: 0,
+    trackedTabIds: [1],
+    pendingPopupTabIds: [],
+    knownTabIdsAtStart: [1],
+    popupStepRecordedTabIds: []
+  };
+
+  const firstResponse = await dispatchRuntimeMessage(listener, {
+    type: "APPEND_STEPS",
+    recordedAt: 1000,
+    steps: [
+      {
+        type: "click",
+        selector: "#openPasswordDialog",
+        label: "결재"
+      }
+    ]
+  });
+
+  assert.equal(firstResponse.ok, true);
+  assert.deepEqual(normalize(harness.storage.macroSteps), [
+    {
+      type: "click",
+      selector: "#openPasswordDialog",
+      label: "결재"
+    }
+  ]);
+  assert.equal(harness.storage.macroRecordingState.lastRecordedAt, 1000);
+
+  const secondResponse = await dispatchRuntimeMessage(listener, {
+    type: "APPEND_STEPS",
+    recordedAt: 1700,
+    steps: [
+      {
+        type: "input",
+        selector: "#userPassword",
+        value: "TestPass!1",
+        label: "비밀번호"
+      }
+    ]
+  });
+
+  assert.equal(secondResponse.ok, true);
+  assert.deepEqual(normalize(harness.storage.macroSteps), [
+    {
+      type: "click",
+      selector: "#openPasswordDialog",
+      label: "결재"
+    },
+    {
+      type: "wait",
+      ms: 700
+    },
+    {
+      type: "input",
+      selector: "#userPassword",
+      value: "TestPass!1",
+      label: "비밀번호"
+    }
+  ]);
+  assert.equal(harness.storage.macroRecordingState.lastRecordedAt, 1700);
 });
 
 test("advances an in-flight click step when the popup tab closes before the content response returns", async () => {
@@ -857,7 +933,7 @@ test("continueMacroRun keeps selector-based iframe steps on the matching frame",
       {
         type: "input",
         selector: "#signPassword",
-        value: "1358314a!",
+        value: "TestPass!1",
         label: "비밀번호"
       },
       {

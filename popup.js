@@ -28,6 +28,10 @@ const resultBox = document.getElementById("resultBox");
 const copyErrorLogBtn = document.getElementById("copyErrorLogBtn");
 const clearErrorLogBtn = document.getElementById("clearErrorLogBtn");
 const errorLogBox = document.getElementById("errorLogBox");
+const copyRunTraceLogBtn = document.getElementById("copyRunTraceLogBtn");
+const clearRunTraceLogBtn = document.getElementById("clearRunTraceLogBtn");
+const refreshRunTraceLogBtn = document.getElementById("refreshRunTraceLogBtn");
+const runTraceLogBox = document.getElementById("runTraceLogBox");
 const toggleDebugBtn = document.getElementById("toggleDebugBtn");
 const copyDebugLogBtn = document.getElementById("copyDebugLogBtn");
 const clearDebugLogBtn = document.getElementById("clearDebugLogBtn");
@@ -36,6 +40,7 @@ const debugLogBox = document.getElementById("debugLogBox");
 
 const ERROR_LOGS_KEY = "macroErrorLogs";
 const DEBUG_LOGS_KEY = "macroDebugLogs";
+const RUN_TRACE_LOGS_KEY = "macroRunTraceLogs";
 
 let currentData = {
   steps: [],
@@ -54,6 +59,7 @@ let currentData = {
     error: ""
   },
   errorLogs: [],
+  runTraceLogs: [],
   debug: {
     enabled: false
   },
@@ -113,6 +119,44 @@ function buildErrorLogText() {
     .join("\n\n");
 }
 
+function buildRunTraceLogText() {
+  const logs = Array.isArray(currentData.runTraceLogs) ? currentData.runTraceLogs : [];
+  if (!logs.length) {
+    return "실행 추적 없음";
+  }
+
+  return [...logs]
+    .reverse()
+    .map((entry, index) => {
+      const time = formatErrorTimestamp(entry?.at);
+      const lines = [
+        `${index + 1}. [${time || "-"}] ${entry?.source || "run"} / ${entry?.eventType || "-"}`,
+        `message: ${String(entry?.message || "-")}`
+      ];
+
+      if (entry?.pageUrl) {
+        lines.push(`url: ${String(entry.pageUrl)}`);
+      }
+
+      if (entry?.tabId != null || entry?.stepIndex != null || entry?.stepType) {
+        lines.push(
+          `tab: ${entry?.tabId ?? "-"} / step: ${entry?.stepIndex ?? "-"} / type: ${entry?.stepType || "-"}`
+        );
+      }
+
+      if (entry?.step) {
+        lines.push(`step: ${JSON.stringify(entry.step)}`);
+      }
+
+      if (entry?.detail != null) {
+        lines.push(`detail: ${JSON.stringify(entry.detail, null, 2)}`);
+      }
+
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
 function formatElementSummary(entry) {
   if (!entry) return "-";
 
@@ -162,6 +206,10 @@ function buildDebugLogText() {
 
 function renderErrorLogs() {
   errorLogBox.textContent = buildErrorLogText();
+}
+
+function renderRunTraceLogs() {
+  runTraceLogBox.textContent = buildRunTraceLogText();
 }
 
 function renderDebugLogs() {
@@ -314,6 +362,29 @@ async function clearDebugLogs() {
 
   currentData.debugLogs = [];
   renderDebugLogs();
+}
+
+async function clearRunTraceLogs() {
+  try {
+    const response = await sendRuntimeMessage({
+      type: "CLEAR_RUN_TRACE_LOGS"
+    });
+
+    if (response?.ok) {
+      currentData.runTraceLogs = [];
+      renderRunTraceLogs();
+      return;
+    }
+  } catch {
+    // storage fallback below
+  }
+
+  await chrome.storage.local.set({
+    [RUN_TRACE_LOGS_KEY]: []
+  });
+
+  currentData.runTraceLogs = [];
+  renderRunTraceLogs();
 }
 
 async function setDebugState(enabled) {
@@ -866,6 +937,7 @@ async function loadData() {
       error: ""
       },
       errorLogs: Array.isArray(response.errorLogs) ? response.errorLogs : [],
+      runTraceLogs: Array.isArray(response.runTraceLogs) ? response.runTraceLogs : [],
       debug: response.debug || {
         enabled: false
       },
@@ -880,6 +952,7 @@ async function loadData() {
     renderSteps();
     renderSavedMacros();
     renderErrorLogs();
+    renderRunTraceLogs();
     renderDebugLogs();
 
     if (currentData.run?.lastMessage) {
@@ -1260,6 +1333,33 @@ clearErrorLogBtn.addEventListener("click", async () => {
     setResult("오류 로그 삭제 완료");
   } catch (error) {
     await handleUiError(error, "popup:clearErrorLogs");
+  }
+});
+
+copyRunTraceLogBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(buildRunTraceLogText());
+    setResult("실행 추적 복사 완료");
+  } catch (error) {
+    await handleUiError(error, "popup:copyRunTraceLog");
+  }
+});
+
+clearRunTraceLogBtn.addEventListener("click", async () => {
+  try {
+    await clearRunTraceLogs();
+    setResult("실행 추적 삭제 완료");
+  } catch (error) {
+    await handleUiError(error, "popup:clearRunTraceLogs");
+  }
+});
+
+refreshRunTraceLogBtn.addEventListener("click", async () => {
+  try {
+    await loadData();
+    setResult("실행 추적 새로고침 완료");
+  } catch (error) {
+    await handleUiError(error, "popup:refreshRunTraceLogs");
   }
 });
 

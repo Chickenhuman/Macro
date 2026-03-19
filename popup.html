@@ -349,6 +349,20 @@
       overflow: auto;
       color: #123b64;
     }
+
+    #runTraceLogBox {
+      margin-top: 8px;
+      padding: 10px;
+      border-radius: 10px;
+      background: #f9fafb;
+      border: 1px solid #d8dee6;
+      font-size: 12px;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      max-height: 260px;
+      overflow: auto;
+      color: #233243;
+    }
   </style>
 </head>
 <body>
@@ -472,6 +486,21 @@
       <button id="clearErrorLogBtn">오류 로그 삭제</button>
     </div>
     <div id="errorLogBox">오류 로그 없음</div>
+  </div>
+
+  <div class="panel">
+    <div class="section-title">실행 추적</div>
+    <div class="footer-note">
+      실행 step 시작, 선택자 탐색, 클릭 방식, 팝업 대기 후보와 실패 직전 상태를 저장합니다.
+    </div>
+    <div class="panel-actions">
+      <button id="copyRunTraceLogBtn">실행 추적 복사</button>
+      <button id="clearRunTraceLogBtn">실행 추적 삭제</button>
+    </div>
+    <div class="panel-actions">
+      <button id="refreshRunTraceLogBtn">실행 추적 새로고침</button>
+    </div>
+    <div id="runTraceLogBox">실행 추적 없음</div>
   </div>
 
   <div class="panel">

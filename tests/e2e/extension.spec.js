@@ -1046,7 +1046,8 @@ async function readStorage(extensionPage) {
       "savedMacros",
       "macroRecordingState",
       "macroRunState",
-      "macroErrorLogs"
+      "macroErrorLogs",
+      "macroRunTraceLogs"
     ]);
   });
 }
@@ -1973,6 +1974,51 @@ test.describe("extension smoke tests", () => {
         return await runPage.textContent("#result");
       })
       .toBe("applied");
+  });
+
+  test("stores run trace logs when a step fails to find its selector", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/record-nav.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const steps = [
+      {
+        type: "click",
+        selector: "#missingConfirmButton",
+        label: "확인",
+        timeout: 600
+      }
+    ];
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return storage.macroRunState?.running;
+      })
+      .toBe(false);
+
+    const storage = await readStorage(extensionPage);
+    const traceLogs = storage.macroRunTraceLogs || [];
+    const failureLog = traceLogs.find(
+      (entry) =>
+        entry?.source === "content:run" &&
+        entry?.eventType === "step-failure" &&
+        String(entry?.message || "").includes("요소를 찾지 못했습니다")
+    );
+
+    expect(failureLog).toBeTruthy();
+    expect(failureLog.detail?.selectorTrace?.count).toBe(0);
+    expect(Array.isArray(failureLog.detail?.visibleButtons)).toBe(true);
+    expect(traceLogs.some((entry) => entry?.eventType === "run-failed")).toBe(true);
   });
 
   test("auto-accepts native alert dialogs during macro run", async () => {

@@ -624,6 +624,14 @@ test("GET_DATA backfills legacy key steps without key metadata", async () => {
       label: "확인"
     }
   ];
+  harness.storage.macroRunTraceLogs = [
+    {
+      at: 1,
+      source: "run:background",
+      eventType: "run-start",
+      message: "매크로 실행 시작"
+    }
+  ];
 
   const response = await dispatchRuntimeMessage(listener, {
     type: "GET_DATA"
@@ -639,6 +647,7 @@ test("GET_DATA backfills legacy key steps without key metadata", async () => {
       code: "Space"
     }
   ]);
+  assert.deepEqual(normalize(response.runTraceLogs), normalize(harness.storage.macroRunTraceLogs));
   assert.deepEqual(normalize(harness.storage.macroSteps), normalize(response.steps));
 });
 

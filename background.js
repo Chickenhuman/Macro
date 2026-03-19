@@ -5,6 +5,7 @@ const RUN_KEY = "macroRunState";
 const ERROR_LOGS_KEY = "macroErrorLogs";
 const DEBUG_STATE_KEY = "macroDebugState";
 const DEBUG_LOGS_KEY = "macroDebugLogs";
+const RUN_TRACE_LOGS_KEY = "macroRunTraceLogs";
 const POPUP_WAIT_ALARM = "macroPopupWaitTimeout";
 
 const DEFAULT_RECORDING_STATE = {
@@ -107,6 +108,51 @@ function isSameOriginOrHostname(url, origin, hostname) {
 
 function uniqTabIds(values) {
   return Array.from(new Set((values || []).filter(isFiniteTabId)));
+}
+
+function sanitizeTraceData(value, depth = 0) {
+  if (value == null) return value;
+
+  if (depth >= 4) {
+    return "[depth-limit]";
+  }
+
+  if (typeof value === "string") {
+    return value.length > 1000 ? `${value.slice(0, 997)}...` : value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => sanitizeTraceData(item, depth + 1));
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value).slice(0, 30);
+    return entries.reduce((acc, [key, entryValue]) => {
+      acc[key] = sanitizeTraceData(entryValue, depth + 1);
+      return acc;
+    }, {});
+  }
+
+  return String(value);
+}
+
+function summarizeTabForTrace(tab) {
+  if (!tab || !isFiniteTabId(tab.id)) return null;
+
+  return sanitizeTraceData({
+    id: tab.id,
+    url: String(tab.url || ""),
+    pendingUrl: String(tab.pendingUrl || ""),
+    title: String(tab.title || ""),
+    status: String(tab.status || ""),
+    windowId: Number.isInteger(tab.windowId) ? tab.windowId : null,
+    openerTabId: isFiniteTabId(tab.openerTabId) ? tab.openerTabId : null,
+    active: !!tab.active
+  });
 }
 
 function collectDescendantTabs(rootTabId, tabs) {
@@ -357,6 +403,11 @@ async function getDebugLogs() {
   return Array.isArray(data[DEBUG_LOGS_KEY]) ? data[DEBUG_LOGS_KEY] : [];
 }
 
+async function getRunTraceLogs() {
+  const data = await chrome.storage.local.get(RUN_TRACE_LOGS_KEY);
+  return Array.isArray(data[RUN_TRACE_LOGS_KEY]) ? data[RUN_TRACE_LOGS_KEY] : [];
+}
+
 async function setErrorLogs(entries) {
   await chrome.storage.local.set({
     [ERROR_LOGS_KEY]: Array.isArray(entries) ? entries.slice(-100) : []
@@ -366,6 +417,12 @@ async function setErrorLogs(entries) {
 async function setDebugLogs(entries) {
   await chrome.storage.local.set({
     [DEBUG_LOGS_KEY]: Array.isArray(entries) ? entries.slice(-200) : []
+  });
+}
+
+async function setRunTraceLogs(entries) {
+  await chrome.storage.local.set({
+    [RUN_TRACE_LOGS_KEY]: Array.isArray(entries) ? entries.slice(-400) : []
   });
 }
 
@@ -410,6 +467,26 @@ async function appendDebugLog(entry) {
 
   const next = [...current, nextEntry].slice(-200);
   await setDebugLogs(next);
+  return next;
+}
+
+async function appendRunTraceLog(entry) {
+  const current = await getRunTraceLogs();
+  const nextEntry = {
+    at: Date.now(),
+    source: String(entry?.source || "run:background"),
+    eventType: String(entry?.eventType || "trace"),
+    pageUrl: String(entry?.pageUrl || ""),
+    tabId: isFiniteTabId(entry?.tabId) ? entry.tabId : null,
+    stepIndex: Number.isInteger(entry?.stepIndex) ? entry.stepIndex : null,
+    stepType: typeof entry?.stepType === "string" ? entry.stepType : "",
+    message: typeof entry?.message === "string" ? entry.message : "",
+    step: sanitizeStep(entry?.step) || null,
+    detail: sanitizeTraceData(entry?.detail ?? null)
+  };
+
+  const next = [...current, nextEntry].slice(-400);
+  await setRunTraceLogs(next);
   return next;
 }
 
@@ -894,6 +971,22 @@ async function clearPopupWaitAlarm() {
 
 async function failRun(message) {
   const runState = await getRunState();
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "run-failed",
+    tabId: runState.currentTabId,
+    stepIndex: runState.stepIndex,
+    stepType: runState.activeStepType || sanitizeStep(runState.steps?.[runState.stepIndex])?.type || "",
+    message: String(message || "실행 실패"),
+    step: runState.steps?.[runState.stepIndex] || null,
+    detail: {
+      currentTabTrail: runState.currentTabTrail || [],
+      waitingForPopup: !!runState.waitingForPopup,
+      popupUrlIncludes: runState.popupUrlIncludes || "",
+      pendingPopupTabIds: runState.pendingPopupTabIds || [],
+      knownTabIdsAtWaitStart: runState.knownTabIdsAtWaitStart || []
+    }
+  });
   await syncRunDialogAutoAccept(runState, false);
   await clearPopupWaitAlarm();
   await appendErrorLog(message || "실행 실패", "run");
@@ -906,6 +999,13 @@ async function failRun(message) {
 
 async function finishRun(message) {
   const runState = await getRunState();
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "run-finished",
+    tabId: runState.currentTabId,
+    stepIndex: runState.stepIndex,
+    message: String(message || "실행 완료")
+  });
   await syncRunDialogAutoAccept(runState, false);
   await clearPopupWaitAlarm();
   await setRunState({
@@ -917,6 +1017,13 @@ async function finishRun(message) {
 
 async function stopRun(message) {
   const runState = await getRunState();
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "run-stopped",
+    tabId: runState.currentTabId,
+    stepIndex: runState.stepIndex,
+    message: String(message || "실행 중지됨")
+  });
   await syncRunDialogAutoAccept(runState, false);
   await clearPopupWaitAlarm();
   return await setRunState({
@@ -1111,6 +1218,17 @@ function findBestPopupCandidate(tabs, runState, step, options = {}) {
   return bestScore >= 0 ? bestTab : null;
 }
 
+function collectPopupCandidatesForTrace(tabs, runState, step, options = {}) {
+  return (tabs || [])
+    .map((tab) => ({
+      score: scorePopupCandidate(tab, runState, step, options),
+      tab: summarizeTabForTrace(tab)
+    }))
+    .filter((item) => item.score >= 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+}
+
 async function switchRunToTab(runState, tabId, message) {
   await ensureContentReady(tabId);
   await setNativeDialogAutoAccept(tabId, true);
@@ -1120,7 +1238,7 @@ async function switchRunToTab(runState, tabId, message) {
     nextTrail.push(runState.currentTabId);
   }
 
-  return await setRunState({
+  const nextState = await setRunState({
     ...runState,
     currentTabId: tabId,
     currentTabTrail: nextTrail,
@@ -1134,6 +1252,20 @@ async function switchRunToTab(runState, tabId, message) {
     pendingPopupTabIds: (runState.pendingPopupTabIds || []).filter((id) => id !== tabId),
     knownTabIdsAtWaitStart: []
   });
+
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "switch-tab",
+    tabId,
+    stepIndex: nextState.stepIndex,
+    message: message || `새 창으로 전환: ${tabId}`,
+    detail: {
+      previousTabId: runState.currentTabId,
+      currentTabTrail: nextState.currentTabTrail || []
+    }
+  });
+
+  return nextState;
 }
 
 async function completeWaitForCurrentRunTab(runState, tab) {
@@ -1152,6 +1284,18 @@ async function completeWaitForCurrentRunTab(runState, tab) {
     error: "",
     pendingPopupTabIds: (runState.pendingPopupTabIds || []).filter((id) => id !== tab.id),
     knownTabIdsAtWaitStart: []
+  });
+
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "wait-for-current-tab-complete",
+    tabId: tab.id,
+    stepIndex: nextState.stepIndex,
+    stepType: "waitForPopup",
+    message: `현재 탭 대기 완료: ${tab.url || tab.id}`,
+    detail: {
+      tab: summarizeTabForTrace(tab)
+    }
   });
 
   await continueMacroRun(nextState);
@@ -1173,13 +1317,28 @@ async function restoreRunToPreviousTab(runState, closedTabId) {
       await ensureContentReady(fallbackTabId);
       await setNativeDialogAutoAccept(fallbackTabId, true);
 
-      return await setRunState({
+      const nextState = await setRunState({
         ...runState,
         currentTabId: fallbackTabId,
         currentTabTrail: trail,
         lastMessage: `팝업이 닫혀 이전 탭으로 복귀: ${fallbackTab.url || fallbackTab.title || fallbackTabId}`,
         error: ""
       });
+
+      await appendRunTraceLog({
+        source: "run:background",
+        eventType: "restore-previous-tab",
+        tabId: fallbackTabId,
+        stepIndex: nextState.stepIndex,
+        message: nextState.lastMessage,
+        detail: {
+          closedTabId,
+          currentTabTrail: nextState.currentTabTrail || [],
+          tab: summarizeTabForTrace(fallbackTab)
+        }
+      });
+
+      return nextState;
     } catch {
       // 다음 후보를 확인
     }
@@ -1192,13 +1351,27 @@ async function restoreRunToPreviousTab(runState, closedTabId) {
         await ensureContentReady(runState.rootTabId);
         await setNativeDialogAutoAccept(runState.rootTabId, true);
 
-        return await setRunState({
+        const nextState = await setRunState({
           ...runState,
           currentTabId: runState.rootTabId,
           currentTabTrail: [],
           lastMessage: `팝업이 닫혀 루트 탭으로 복귀: ${rootTab.url || rootTab.title || runState.rootTabId}`,
           error: ""
         });
+
+        await appendRunTraceLog({
+          source: "run:background",
+          eventType: "restore-root-tab",
+          tabId: runState.rootTabId,
+          stepIndex: nextState.stepIndex,
+          message: nextState.lastMessage,
+          detail: {
+            closedTabId,
+            tab: summarizeTabForTrace(rootTab)
+          }
+        });
+
+        return nextState;
       }
     } catch {
       // 실패 시 아래에서 중단
@@ -1212,11 +1385,41 @@ async function restoreRunToPreviousTab(runState, closedTabId) {
 async function handleWaitForPopupStep(runState, step) {
   const tabs = await chrome.tabs.query({});
   const hasPreStepKnownTabs = (runState.knownTabIdsAtWaitStart || []).length > 0;
+  const traceOptions = {
+    allowSameOriginFallback: hasPreStepKnownTabs
+  };
+  const candidateTrace = collectPopupCandidatesForTrace(tabs, runState, step, traceOptions);
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "wait-for-popup-check",
+    tabId: runState.currentTabId,
+    stepIndex: runState.stepIndex,
+    stepType: "waitForPopup",
+    message: `새 창 후보 확인: ${step.urlIncludes || "URL 조건 없음"}`,
+    step,
+    detail: {
+      pendingPopupTabIds: runState.pendingPopupTabIds || [],
+      knownTabIdsAtWaitStart: runState.knownTabIdsAtWaitStart || [],
+      candidates: candidateTrace
+    }
+  });
   const found = findBestPopupCandidate(tabs, runState, step, {
     allowSameOriginFallback: hasPreStepKnownTabs
   });
 
   if (found) {
+    await appendRunTraceLog({
+      source: "run:background",
+      eventType: "wait-for-popup-found",
+      tabId: found.id,
+      stepIndex: runState.stepIndex,
+      stepType: "waitForPopup",
+      message: `새 창 즉시 감지: ${found.url || found.id}`,
+      step,
+      detail: {
+        tab: summarizeTabForTrace(found)
+      }
+    });
     const nextState = await switchRunToTab(
       runState,
       found.id,
@@ -1244,6 +1447,22 @@ async function handleWaitForPopupStep(runState, step) {
     knownTabIdsAtWaitStart:
       hasPreStepKnownTabs ? runState.knownTabIdsAtWaitStart : tabs.map((tab) => tab.id).filter(isFiniteTabId)
   });
+
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "wait-for-popup-start",
+    tabId: runState.currentTabId,
+    stepIndex: runState.stepIndex,
+    stepType: "waitForPopup",
+    message: `새 창 대기 시작: ${step.urlIncludes || "URL 조건 없음"}`,
+    step,
+    detail: {
+      timeout,
+      currentTabId: runState.currentTabId,
+      knownTabIdsAtWaitStart:
+        hasPreStepKnownTabs ? runState.knownTabIdsAtWaitStart : tabs.map((tab) => tab.id).filter(isFiniteTabId)
+    }
+  });
 }
 
 async function restartMacroRunIteration(runState) {
@@ -1265,7 +1484,7 @@ async function restartMacroRunIteration(runState) {
 
   const nextIteration = (runState.iteration || 1) + 1;
 
-  return await setRunState({
+  const nextState = await setRunState({
     ...runState,
     currentTabId: runState.rootTabId,
     currentTabTrail: [],
@@ -1284,6 +1503,20 @@ async function restartMacroRunIteration(runState) {
     repeatRemaining: Math.max(1, runState.repeatRemaining - 1),
     iteration: nextIteration
   });
+
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "run-iteration-restart",
+    tabId: nextState.currentTabId,
+    stepIndex: nextState.stepIndex,
+    message: nextState.lastMessage,
+    detail: {
+      iteration: nextIteration,
+      repeatTotal: runState.repeatTotal
+    }
+  });
+
+  return nextState;
 }
 
 async function waitForClickStepRecovery(runState, originalTab, knownTabIdsAtWaitStart, timeout = 2500) {
@@ -1666,6 +1899,21 @@ async function continueMacroRun(passedState) {
         throw new Error("현재 실행 탭은 확장 실행이 허용되지 않는 페이지입니다.");
       }
 
+      await appendRunTraceLog({
+        source: "run:background",
+        eventType: "step-dispatch",
+        tabId: runState.currentTabId,
+        stepIndex: runState.stepIndex,
+        stepType: step.type,
+        message: `${runState.stepIndex + 1}번째 step 실행 시작`,
+        step,
+        detail: {
+          currentTab: summarizeTabForTrace(tab),
+          nextStep: sanitizeStep(runState.steps[runState.stepIndex + 1]) || null,
+          knownTabIdsAtWaitStart
+        }
+      });
+
       await ensureContentReady(runState.currentTabId);
 
       const response = await sendTabMessage(runState.currentTabId, {
@@ -1677,6 +1925,16 @@ async function continueMacroRun(passedState) {
       if (!response?.ok) {
         throw new Error(response?.message || "step 실행 실패");
       }
+
+      await appendRunTraceLog({
+        source: "run:background",
+        eventType: "step-response",
+        tabId: runState.currentTabId,
+        stepIndex: runState.stepIndex,
+        stepType: step.type,
+        message: response.message || "step 실행 응답 수신",
+        step
+      });
 
       const postClickNavigationObserveMs =
         step.type === "click" ? getPostClickNavigationObserveMs(nextStep) : 0;
@@ -1724,7 +1982,31 @@ async function continueMacroRun(passedState) {
         activeStepType: "",
         activeStepTabId: null
       });
+
+      await appendRunTraceLog({
+        source: "run:background",
+        eventType: "step-complete",
+        tabId: runState.currentTabId,
+        stepIndex: runState.stepIndex,
+        stepType: step.type,
+        message: runState.lastMessage || "step 완료",
+        step
+      });
     } catch (error) {
+      await appendRunTraceLog({
+        source: "run:background",
+        eventType: "step-error",
+        tabId: runState.currentTabId,
+        stepIndex: runState.stepIndex,
+        stepType: step.type,
+        message: error?.message || String(error),
+        step,
+        detail: {
+          currentTab: summarizeTabForTrace(tab),
+          knownTabIdsAtWaitStart
+        }
+      });
+
       if (isMissingTabError(error)) {
         const restoredState = await restoreRunToPreviousTab(runState, runState.currentTabId);
         if (restoredState?.running) {
@@ -1811,6 +2093,18 @@ async function handleRunRelatedTab(tabId, tab) {
   if (tabId === runState.currentTabId) {
     const expected = String(step.urlIncludes || "").trim();
     if (!expected || String(tab?.url || "").includes(expected)) {
+      await appendRunTraceLog({
+        source: "run:background",
+        eventType: "wait-for-popup-current-tab-match",
+        tabId,
+        stepIndex: runState.stepIndex,
+        stepType: "waitForPopup",
+        message: `현재 탭이 대기 조건과 일치: ${tab?.url || tabId}`,
+        detail: {
+          tab: summarizeTabForTrace(tab),
+          popupUrlIncludes: runState.popupUrlIncludes || ""
+        }
+      });
       const waitMs = Date.now() - (runState.popupWaitStartedAt || 0);
       if (runState.popupTimeout > 0 && waitMs > runState.popupTimeout) {
         await failRun(`새 창 대기 시간 초과: ${runState.popupUrlIncludes || "조건 없음"}`);
@@ -1828,6 +2122,20 @@ async function handleRunRelatedTab(tabId, tab) {
 
   const score = scorePopupCandidate(tab, runState, step);
   if (score < 0) return;
+
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "wait-for-popup-related-tab-match",
+    tabId,
+    stepIndex: runState.stepIndex,
+    stepType: "waitForPopup",
+    message: `관련 탭 후보 감지: ${tab?.url || tabId}`,
+    detail: {
+      score,
+      tab: summarizeTabForTrace(tab),
+      popupUrlIncludes: runState.popupUrlIncludes || ""
+    }
+  });
 
   const waitMs = Date.now() - (runState.popupWaitStartedAt || 0);
   if (runState.popupTimeout > 0 && waitMs > runState.popupTimeout) {
@@ -1856,7 +2164,8 @@ chrome.runtime.onInstalled.addListener(async () => {
     RUN_KEY,
     ERROR_LOGS_KEY,
     DEBUG_STATE_KEY,
-    DEBUG_LOGS_KEY
+    DEBUG_LOGS_KEY,
+    RUN_TRACE_LOGS_KEY
   ]);
 
   if (!Array.isArray(data[STEPS_KEY])) {
@@ -1887,6 +2196,10 @@ chrome.runtime.onInstalled.addListener(async () => {
     await setDebugLogs([]);
   }
 
+  if (!Array.isArray(data[RUN_TRACE_LOGS_KEY])) {
+    await setRunTraceLogs([]);
+  }
+
   await updateBadge();
 });
 
@@ -1906,6 +2219,19 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 
   const runState = await getRunState();
   if (runState.running) {
+    await appendRunTraceLog({
+      source: "run:background",
+      eventType: "tab-created",
+      tabId: tab.id,
+      stepIndex: runState.stepIndex,
+      message: `탭 생성 감지: ${tab.url || tab.pendingUrl || tab.id}`,
+      detail: {
+        tab: summarizeTabForTrace(tab),
+        currentTabId: runState.currentTabId,
+        rootTabId: runState.rootTabId
+      }
+    });
+
     const openerCandidates = [runState.currentTabId, runState.rootTabId].filter(isFiniteTabId);
     if (isFiniteTabId(tab.openerTabId) && openerCandidates.includes(tab.openerTabId)) {
       await setRunState({
@@ -1926,6 +2252,20 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const runState = await getRunState();
   if (runState.running && collectRunDialogTabIds(runState).includes(tabId)) {
     await setNativeDialogAutoAccept(tabId, true);
+  }
+
+  if (runState.running) {
+    await appendRunTraceLog({
+      source: "run:background",
+      eventType: "tab-updated",
+      tabId,
+      stepIndex: runState.stepIndex,
+      message: `탭 완료 감지: ${tab?.url || tabId}`,
+      detail: {
+        tab: summarizeTabForTrace(tab),
+        changeInfo: sanitizeTraceData(changeInfo)
+      }
+    });
   }
 });
 
@@ -1952,6 +2292,20 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 
   const runState = await getRunState();
   if (!runState.running) return;
+
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "tab-removed",
+    tabId,
+    stepIndex: runState.stepIndex,
+    stepType: runState.activeStepType || "",
+    message: `탭 제거 감지: ${tabId}`,
+    detail: {
+      currentTabId: runState.currentTabId,
+      rootTabId: runState.rootTabId,
+      currentTabTrail: runState.currentTabTrail || []
+    }
+  });
 
   const nextPending = (runState.pendingPopupTabIds || []).filter((id) => id !== tabId);
   const nextKnown = (runState.knownTabIdsAtWaitStart || []).filter((id) => id !== tabId);
@@ -2022,14 +2376,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       switch (message?.type) {
         case "GET_DATA": {
-          const [steps, savedMacros, recording, runState, errorLogs, debug, debugLogs] = await Promise.all([
+          const [steps, savedMacros, recording, runState, errorLogs, debug, debugLogs, runTraceLogs] =
+            await Promise.all([
             getSteps(),
             getSavedMacros(),
             getRecordingState(),
             getRunState(),
             getErrorLogs(),
             getDebugState(),
-            getDebugLogs()
+            getDebugLogs(),
+            getRunTraceLogs()
           ]);
 
           sendResponse({
@@ -2040,7 +2396,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             run: runState,
             errorLogs,
             debug,
-            debugLogs
+            debugLogs,
+            runTraceLogs
           });
           return;
         }
@@ -2184,6 +2541,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
 
           await ensureContentReady(tabId);
+          await setRunTraceLogs([]);
 
           await setRunState({
             running: true,
@@ -2207,6 +2565,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             repeatRemaining: repeatCount,
             repeatDelayMs,
             iteration: 1
+          });
+
+          await appendRunTraceLog({
+            source: "run:background",
+            eventType: "run-start",
+            tabId,
+            stepIndex: 0,
+            message:
+              repeatCount > 1
+                ? `매크로 실행 시작 (${repeatCount}회 반복)`
+                : "매크로 실행 시작",
+            detail: {
+              rootTab: summarizeTabForTrace(tab),
+              stepCount: sanitized.length,
+              repeatCount,
+              repeatDelayMs
+            }
           });
 
           await syncRunDialogAutoAccept(await getRunState(), true);
@@ -2361,12 +2736,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
+        case "APPEND_RUN_TRACE_LOG": {
+          const runTraceLogs = await appendRunTraceLog(message.entry || {});
+
+          sendResponse({
+            ok: true,
+            runTraceLogs
+          });
+          return;
+        }
+
         case "CLEAR_DEBUG_LOGS": {
           await setDebugLogs([]);
 
           sendResponse({
             ok: true,
             debugLogs: []
+          });
+          return;
+        }
+
+        case "CLEAR_RUN_TRACE_LOGS": {
+          await setRunTraceLogs([]);
+
+          sendResponse({
+            ok: true,
+            runTraceLogs: []
           });
           return;
         }
@@ -2382,7 +2777,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (
         message?.type !== "GET_DATA" &&
         message?.type !== "APPEND_ERROR_LOG" &&
-        message?.type !== "APPEND_DEBUG_LOG"
+        message?.type !== "APPEND_DEBUG_LOG" &&
+        message?.type !== "APPEND_RUN_TRACE_LOG"
       ) {
         try {
           await appendErrorLog(error?.message || String(error), message?.type || "runtime");

@@ -303,6 +303,100 @@
     }
   }
 
+  async function appendRunTraceLog(entry) {
+    try {
+      await chrome.runtime.sendMessage({
+        type: "APPEND_RUN_TRACE_LOG",
+        entry: {
+          ...entry,
+          source: entry?.source || "content:run",
+          pageUrl: location.href
+        }
+      });
+    } catch {
+      // ignore run trace logging failure
+    }
+  }
+
+  function summarizeTraceElement(el) {
+    if (!(el instanceof Element)) return null;
+
+    return {
+      ...summarizeElement(el),
+      visible: isVisible(el),
+      label: getHumanLabel(el),
+      selector: safeBuildSelector(el) || ""
+    };
+  }
+
+  function collectSelectorTrace(selector, limit = 5) {
+    const cleanSelector = String(selector || "").trim();
+    if (!cleanSelector) {
+      return {
+        selector: "",
+        count: 0,
+        matches: []
+      };
+    }
+
+    try {
+      const matches = [...document.querySelectorAll(cleanSelector)];
+      return {
+        selector: cleanSelector,
+        count: matches.length,
+        matches: matches.slice(0, limit).map(summarizeTraceElement)
+      };
+    } catch (error) {
+      return {
+        selector: cleanSelector,
+        count: 0,
+        error: String(error?.message || error),
+        matches: []
+      };
+    }
+  }
+
+  function collectVisibleButtonTrace(expectedLabel = "", limit = 10) {
+    const seen = new Set();
+    const rows = [];
+
+    for (const node of document.querySelectorAll(BUTTON_LIKE_CANDIDATE_SELECTOR)) {
+      const candidate = getClickableTarget(node);
+      if (!(candidate instanceof Element)) continue;
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      if (!isButtonLikeElement(candidate) || !isVisible(candidate)) continue;
+
+      const label = getHumanLabel(candidate);
+      rows.push({
+        ...summarizeTraceElement(candidate),
+        labelMatches: !!expectedLabel && hasMatchingLabel(candidate, expectedLabel)
+      });
+
+      if (rows.length >= limit) {
+        break;
+      }
+    }
+
+    return rows;
+  }
+
+  function buildStepFailureContext(step) {
+    const context = {
+      locationHref: location.href
+    };
+
+    if (step?.selector) {
+      context.selectorTrace = collectSelectorTrace(step.selector);
+    }
+
+    if (step?.type === "click") {
+      context.visibleButtons = collectVisibleButtonTrace(step?.label || "");
+    }
+
+    return context;
+  }
+
   function logDebugEvent(eventType, rawTarget, extra = {}) {
     if (!debugMode) return;
 
@@ -2106,6 +2200,16 @@
     const raw = await waitForClickTarget(step, step.timeout || 10000, 200);
 
     if (isCheckboxLikeElement(raw)) {
+      await appendRunTraceLog({
+        eventType: "click-dispatch",
+        stepType: step.type,
+        message: "체크박스형 요소 클릭",
+        step,
+        detail: {
+          target: summarizeTraceElement(raw),
+          selectorTrace: collectSelectorTrace(step.selector)
+        }
+      });
       await clickCheckboxLike(raw, step);
       return;
     }
@@ -2123,6 +2227,18 @@
     await delay(250);
 
     if (prefersMainWorldDirectClick(el) && typeof el.click === "function") {
+      await appendRunTraceLog({
+        eventType: "click-dispatch",
+        stepType: step.type,
+        message: "main world direct click 사용",
+        step,
+        detail: {
+          rawTarget: summarizeTraceElement(raw),
+          resolvedTarget: summarizeTraceElement(el),
+          selectorTrace: collectSelectorTrace(step.selector),
+          method: "main-world-click"
+        }
+      });
       const clickedInMainWorld = await clickInMainWorld(step, el);
       if (clickedInMainWorld) {
         return;
@@ -2132,10 +2248,34 @@
     el.focus?.();
 
     if (prefersDirectClick(el) && typeof el.click === "function") {
+      await appendRunTraceLog({
+        eventType: "click-dispatch",
+        stepType: step.type,
+        message: "직접 click() 사용",
+        step,
+        detail: {
+          rawTarget: summarizeTraceElement(raw),
+          resolvedTarget: summarizeTraceElement(el),
+          selectorTrace: collectSelectorTrace(step.selector),
+          method: "element.click"
+        }
+      });
       el.click();
       return;
     }
 
+    await appendRunTraceLog({
+      eventType: "click-dispatch",
+      stepType: step.type,
+      message: "합성 마우스 시퀀스 사용",
+      step,
+      detail: {
+        rawTarget: summarizeTraceElement(raw),
+        resolvedTarget: summarizeTraceElement(el),
+        selectorTrace: collectSelectorTrace(step.selector),
+        method: "mouse-sequence"
+      }
+    });
     fireMouseSequence(el);
   }
 
@@ -2258,25 +2398,61 @@
     const desc = describeStep(step, index);
     setOverlay("매크로 실행 중", desc);
 
-    if (step.type === "click") {
-      await doClick(step);
-    } else if (step.type === "key") {
-      await doKey(step);
-    } else if (step.type === "input") {
-      await doInput(step);
-    } else if (step.type === "select") {
-      await doSelect(step);
-    } else if (step.type === "dropdownSelect") {
-      await doDropdownSelect(step);
-    } else if (step.type === "wait") {
-      await doWait(step);
-    } else if (step.type === "waitFor") {
-      await doWaitFor(step);
-    } else {
-      throw new Error(`지원하지 않는 step type입니다: ${step.type}`);
+    await appendRunTraceLog({
+      source: "content:run",
+      eventType: "step-start",
+      stepIndex: index,
+      stepType: step.type,
+      message: desc,
+      step,
+      detail: {
+        locationHref: location.href,
+        selectorTrace: step.selector ? collectSelectorTrace(step.selector) : null
+      }
+    });
+
+    try {
+      if (step.type === "click") {
+        await doClick(step);
+      } else if (step.type === "key") {
+        await doKey(step);
+      } else if (step.type === "input") {
+        await doInput(step);
+      } else if (step.type === "select") {
+        await doSelect(step);
+      } else if (step.type === "dropdownSelect") {
+        await doDropdownSelect(step);
+      } else if (step.type === "wait") {
+        await doWait(step);
+      } else if (step.type === "waitFor") {
+        await doWaitFor(step);
+      } else {
+        throw new Error(`지원하지 않는 step type입니다: ${step.type}`);
+      }
+    } catch (error) {
+      await appendRunTraceLog({
+        source: "content:run",
+        eventType: "step-failure",
+        stepIndex: index,
+        stepType: step.type,
+        message: error?.message || String(error),
+        step,
+        detail: buildStepFailureContext(step)
+      });
+      throw error;
     }
 
-    return `${desc} 완료`;
+    const successMessage = `${desc} 완료`;
+    await appendRunTraceLog({
+      source: "content:run",
+      eventType: "step-success",
+      stepIndex: index,
+      stepType: step.type,
+      message: successMessage,
+      step
+    });
+
+    return successMessage;
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

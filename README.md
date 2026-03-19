@@ -57,6 +57,7 @@
 - PUDD 스타일 체크박스
 - PUDD/커스텀 버튼
 - 비밀번호 입력창 기록/재실행
+- 같은 탭 안에서 뜨는 iframe 결재/비밀번호 창 재실행
 - 같은 페이지 안 드롭다운/선택기
 - 버튼을 눌러 열리는 picker형 선택기
 - 팝업을 열어 값을 반영하는 선택기
@@ -235,11 +236,12 @@ popup.js
 
 현재 실행 추적 로그에는 아래 정보가 들어갑니다.
 - step 시작/성공/실패
-- 실행 당시 URL, 탭 id, step index/type
+- 실행 당시 URL, 탭 id, frame id, step index/type
 - selector 매칭 개수와 앞쪽 후보 요소 요약
 - visible 버튼 후보 목록
 - 실제 클릭 방식
   `main-world click`, `element.click()`, `mouse sequence`
+- selector 기준 frame 후보 점수와 실제 선택된 frame
 - `waitForPopup` 후보 탭 점수와 전환/timeout 흐름
 - 탭 생성/완료/닫힘과 복귀 처리 기록
 

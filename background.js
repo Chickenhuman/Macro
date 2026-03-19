@@ -29,6 +29,7 @@ const DEFAULT_RUN_STATE = {
   rootOrigin: "",
   rootHostname: "",
   currentTabId: null,
+  currentFrameId: 0,
   currentTabTrail: [],
   steps: [],
   stepIndex: 0,
@@ -58,6 +59,10 @@ function delay(ms) {
 }
 
 function isFiniteTabId(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function isFiniteFrameId(value) {
   return Number.isInteger(value) && value >= 0;
 }
 
@@ -478,6 +483,7 @@ async function appendRunTraceLog(entry) {
     eventType: String(entry?.eventType || "trace"),
     pageUrl: String(entry?.pageUrl || ""),
     tabId: isFiniteTabId(entry?.tabId) ? entry.tabId : null,
+    frameId: isFiniteFrameId(entry?.frameId) ? entry.frameId : null,
     stepIndex: Number.isInteger(entry?.stepIndex) ? entry.stepIndex : null,
     stepType: typeof entry?.stepType === "string" ? entry.stepType : "",
     message: typeof entry?.message === "string" ? entry.message : "",
@@ -497,6 +503,7 @@ async function setRunState(state) {
   };
 
   nextState.steps = Array.isArray(nextState.steps) ? nextState.steps : [];
+  nextState.currentFrameId = isFiniteFrameId(nextState.currentFrameId) ? nextState.currentFrameId : 0;
   nextState.currentTabTrail = uniqTabIds(nextState.currentTabTrail);
   nextState.pendingPopupTabIds = uniqTabIds(nextState.pendingPopupTabIds);
   nextState.knownTabIdsAtWaitStart = uniqTabIds(nextState.knownTabIdsAtWaitStart);
@@ -519,6 +526,7 @@ async function setRunState(state) {
     nextState.rootOrigin = "";
     nextState.rootHostname = "";
     nextState.currentTabId = null;
+    nextState.currentFrameId = 0;
     nextState.currentTabTrail = [];
     nextState.steps = [];
     nextState.stepIndex = 0;
@@ -646,18 +654,36 @@ async function sendTabMessage(tabId, message) {
   return await chrome.tabs.sendMessage(tabId, message);
 }
 
+async function sendTabMessageToFrame(tabId, message, frameId) {
+  if (isFiniteFrameId(frameId)) {
+    return await chrome.tabs.sendMessage(tabId, message, {
+      frameId
+    });
+  }
+
+  return await sendTabMessage(tabId, message);
+}
+
 async function getTabFrameIds(tabId) {
   if (!chrome.webNavigation?.getAllFrames) {
-    return [];
+    return [0];
   }
 
   try {
     const frames = await chrome.webNavigation.getAllFrames({
       tabId
     });
-    return uniqTabIds((frames || []).map((frame) => frame?.frameId));
+    const frameIds = Array.from(
+      new Set((frames || []).map((frame) => frame?.frameId).filter(isFiniteFrameId))
+    );
+
+    if (!frameIds.includes(0)) {
+      frameIds.unshift(0);
+    }
+
+    return frameIds.length ? frameIds : [0];
   } catch {
-    return [];
+    return [0];
   }
 }
 
@@ -699,6 +725,116 @@ async function broadcastTabMessage(tabId, message) {
       response: await sendTabMessage(tabId, message)
     }
   ];
+}
+
+function shouldResolveRunStepFrame(step) {
+  if (!step || typeof step !== "object") {
+    return false;
+  }
+
+  if (step.type === "waitForPopup" || step.type === "wait") {
+    return false;
+  }
+
+  return typeof step.selector === "string" && step.selector.trim().length > 0;
+}
+
+function normalizeResolvedFrameId(frameId, fallback = 0) {
+  if (isFiniteFrameId(frameId)) {
+    return frameId;
+  }
+
+  return isFiniteFrameId(fallback) ? fallback : 0;
+}
+
+function scoreRunFrameCandidate(candidate, preferredFrameId = 0) {
+  let score = typeof candidate?.response?.score === "number" ? candidate.response.score : -1;
+
+  if (score < 0) {
+    return score;
+  }
+
+  const frameId = normalizeResolvedFrameId(candidate?.frameId, preferredFrameId);
+  const detail = candidate?.response?.detail || {};
+
+  if (frameId === normalizeResolvedFrameId(preferredFrameId, 0)) {
+    score += 40;
+  }
+
+  if (detail.documentHasFocus) {
+    score += 20;
+  }
+
+  if (detail.activeElement?.selector === candidate?.response?.target?.selector) {
+    score += 20;
+  }
+
+  return score;
+}
+
+function summarizeRunFrameCandidateForTrace(candidate, preferredFrameId = 0) {
+  if (!candidate) return null;
+
+  const detail = candidate.response?.detail || {};
+  return sanitizeTraceData({
+    frameId: normalizeResolvedFrameId(candidate.frameId, preferredFrameId),
+    score: scoreRunFrameCandidate(candidate, preferredFrameId),
+    rawScore: typeof candidate?.response?.score === "number" ? candidate.response.score : -1,
+    locationHref: detail.locationHref || "",
+    topFrame: !!detail.topFrame,
+    documentHasFocus: !!detail.documentHasFocus,
+    target: candidate.response?.target || null,
+    activeElement: detail.activeElement || null,
+    selectorTrace: detail.selectorTrace || null
+  });
+}
+
+async function resolveRunStepFrame(tabId, step, preferredFrameId = 0) {
+  const fallbackFrameId = normalizeResolvedFrameId(preferredFrameId, 0);
+
+  if (!shouldResolveRunStepFrame(step)) {
+    return {
+      frameId: fallbackFrameId,
+      candidates: [],
+      matched: false
+    };
+  }
+
+  const responses = await broadcastTabMessage(tabId, {
+    type: "LOCATE_RUN_STEP_TARGET",
+    step
+  });
+
+  const candidates = (responses || [])
+    .filter((entry) => entry?.response?.ok && entry.response.canRun)
+    .map((entry) => ({
+      frameId: normalizeResolvedFrameId(entry?.frameId, fallbackFrameId),
+      response: entry.response
+    }))
+    .sort((a, b) => {
+      const scoreDiff = scoreRunFrameCandidate(b, fallbackFrameId) - scoreRunFrameCandidate(a, fallbackFrameId);
+      if (scoreDiff !== 0) {
+        return scoreDiff;
+      }
+
+      const aIsPreferred = a.frameId === fallbackFrameId ? 1 : 0;
+      const bIsPreferred = b.frameId === fallbackFrameId ? 1 : 0;
+      return bIsPreferred - aIsPreferred;
+    });
+
+  if (!candidates.length) {
+    return {
+      frameId: fallbackFrameId,
+      candidates: [],
+      matched: false
+    };
+  }
+
+  return {
+    frameId: candidates[0].frameId,
+    candidates: candidates.map((entry) => summarizeRunFrameCandidateForTrace(entry, fallbackFrameId)),
+    matched: true
+  };
 }
 
 function collectRunDialogTabIds(runState) {
@@ -1241,6 +1377,7 @@ async function switchRunToTab(runState, tabId, message) {
   const nextState = await setRunState({
     ...runState,
     currentTabId: tabId,
+    currentFrameId: 0,
     currentTabTrail: nextTrail,
     stepIndex: runState.stepIndex + 1,
     waitingForPopup: false,
@@ -1275,6 +1412,7 @@ async function completeWaitForCurrentRunTab(runState, tab) {
 
   const nextState = await setRunState({
     ...runState,
+    currentFrameId: 0,
     stepIndex: runState.stepIndex + 1,
     waitingForPopup: false,
     popupUrlIncludes: "",
@@ -1320,6 +1458,7 @@ async function restoreRunToPreviousTab(runState, closedTabId) {
       const nextState = await setRunState({
         ...runState,
         currentTabId: fallbackTabId,
+        currentFrameId: 0,
         currentTabTrail: trail,
         lastMessage: `팝업이 닫혀 이전 탭으로 복귀: ${fallbackTab.url || fallbackTab.title || fallbackTabId}`,
         error: ""
@@ -1354,6 +1493,7 @@ async function restoreRunToPreviousTab(runState, closedTabId) {
         const nextState = await setRunState({
           ...runState,
           currentTabId: runState.rootTabId,
+          currentFrameId: 0,
           currentTabTrail: [],
           lastMessage: `팝업이 닫혀 루트 탭으로 복귀: ${rootTab.url || rootTab.title || runState.rootTabId}`,
           error: ""
@@ -1487,6 +1627,7 @@ async function restartMacroRunIteration(runState) {
   const nextState = await setRunState({
     ...runState,
     currentTabId: runState.rootTabId,
+    currentFrameId: 0,
     currentTabTrail: [],
     stepIndex: 0,
     waitingForPopup: false,
@@ -1569,6 +1710,7 @@ async function waitForClickStepRecovery(runState, originalTab, knownTabIdsAtWait
       if (navigated && stillHandlingSameStep) {
         const advancedRunState = await setRunState({
           ...latestRunState,
+          currentFrameId: 0,
           stepIndex: latestRunState.stepIndex + 1,
           lastMessage:
             `${latestRunState.stepIndex + 1} / ${latestRunState.steps.length} step 완료 ` +
@@ -1768,6 +1910,7 @@ async function waitForSuccessfulClickNavigation(
 
         const advancedRunState = await setRunState({
           ...latestReadyRunState,
+          currentFrameId: 0,
           stepIndex: latestReadyRunState.stepIndex + 1,
           lastMessage:
             `${latestReadyRunState.stepIndex + 1} / ${latestReadyRunState.steps.length} step 완료 ` +
@@ -1855,6 +1998,8 @@ async function continueMacroRun(passedState) {
 
     let knownTabIdsAtWaitStart = [];
     let tab = null;
+    let dispatchFrameId = normalizeResolvedFrameId(runState.currentFrameId, 0);
+    let dispatchFrameCandidates = [];
 
     try {
       const nextStep = sanitizeStep(runState.steps[runState.stepIndex + 1]);
@@ -1899,28 +2044,41 @@ async function continueMacroRun(passedState) {
         throw new Error("현재 실행 탭은 확장 실행이 허용되지 않는 페이지입니다.");
       }
 
+      await ensureContentReady(runState.currentTabId);
+
+      const resolvedFrame = await resolveRunStepFrame(
+        runState.currentTabId,
+        step,
+        runState.currentFrameId
+      );
+      dispatchFrameId = normalizeResolvedFrameId(resolvedFrame.frameId, runState.currentFrameId);
+      dispatchFrameCandidates = Array.isArray(resolvedFrame.candidates) ? resolvedFrame.candidates : [];
+
       await appendRunTraceLog({
         source: "run:background",
         eventType: "step-dispatch",
         tabId: runState.currentTabId,
+        frameId: dispatchFrameId,
         stepIndex: runState.stepIndex,
         stepType: step.type,
         message: `${runState.stepIndex + 1}번째 step 실행 시작`,
         step,
         detail: {
           currentTab: summarizeTabForTrace(tab),
+          currentFrameId: runState.currentFrameId,
+          selectedFrameId: dispatchFrameId,
+          matchedFrame: !!resolvedFrame.matched,
+          frameCandidates: dispatchFrameCandidates,
           nextStep: sanitizeStep(runState.steps[runState.stepIndex + 1]) || null,
           knownTabIdsAtWaitStart
         }
       });
 
-      await ensureContentReady(runState.currentTabId);
-
-      const response = await sendTabMessage(runState.currentTabId, {
+      const response = await sendTabMessageToFrame(runState.currentTabId, {
         type: "RUN_SINGLE_STEP",
         step,
         index: runState.stepIndex
-      });
+      }, dispatchFrameId);
 
       if (!response?.ok) {
         throw new Error(response?.message || "step 실행 실패");
@@ -1930,6 +2088,7 @@ async function continueMacroRun(passedState) {
         source: "run:background",
         eventType: "step-response",
         tabId: runState.currentTabId,
+        frameId: dispatchFrameId,
         stepIndex: runState.stepIndex,
         stepType: step.type,
         message: response.message || "step 실행 응답 수신",
@@ -1972,6 +2131,7 @@ async function continueMacroRun(passedState) {
 
       runState = await setRunState({
         ...latestRunState,
+        currentFrameId: dispatchFrameId,
         stepIndex: latestRunState.stepIndex + 1,
         lastMessage:
           response.message ||
@@ -1987,6 +2147,7 @@ async function continueMacroRun(passedState) {
         source: "run:background",
         eventType: "step-complete",
         tabId: runState.currentTabId,
+        frameId: dispatchFrameId,
         stepIndex: runState.stepIndex,
         stepType: step.type,
         message: runState.lastMessage || "step 완료",
@@ -1997,12 +2158,16 @@ async function continueMacroRun(passedState) {
         source: "run:background",
         eventType: "step-error",
         tabId: runState.currentTabId,
+        frameId: dispatchFrameId,
         stepIndex: runState.stepIndex,
         stepType: step.type,
         message: error?.message || String(error),
         step,
         detail: {
           currentTab: summarizeTabForTrace(tab),
+          currentFrameId: runState.currentFrameId,
+          selectedFrameId: dispatchFrameId,
+          frameCandidates: dispatchFrameCandidates,
           knownTabIdsAtWaitStart
         }
       });
@@ -2550,6 +2715,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             rootOrigin: getUrlOrigin(tab.url || ""),
             rootHostname: getUrlHostname(tab.url || ""),
             currentTabId: tabId,
+            currentFrameId: 0,
             currentTabTrail: [],
             steps: sanitized,
             stepIndex: 0,
@@ -2737,7 +2903,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case "APPEND_RUN_TRACE_LOG": {
-          const runTraceLogs = await appendRunTraceLog(message.entry || {});
+          const runTraceLogs = await appendRunTraceLog({
+            ...(message.entry || {}),
+            frameId: isFiniteFrameId(sender?.frameId)
+              ? sender.frameId
+              : message?.entry?.frameId
+          });
 
           sendResponse({
             ok: true,

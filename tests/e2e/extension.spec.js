@@ -99,6 +99,12 @@ async function startFixtureServer() {
             <label for="signPassword">비밀번호</label>
             <input id="signPassword" type="password" autocomplete="current-password" />
             <button id="closeFocus" type="button">다음</button>
+            <div id="childState">idle</div>
+          `,
+          `
+            document.querySelector("#closeFocus").addEventListener("click", () => {
+              document.querySelector("#childState").textContent = "done";
+            });
           `
         )
       );
@@ -1204,6 +1210,70 @@ test.describe("extension smoke tests", () => {
           step.value === "1358314a!"
       )
     ).toBe(true);
+  });
+
+  test("runs click, wait, input, and click steps inside a dynamically added iframe", async () => {
+    const page = await bundle.context.newPage();
+    await page.goto(`${server.baseUrl}/iframe-password-root.html`);
+
+    const tabId = await findTabId(extensionPage, page.url());
+    expect(tabId).toBeTruthy();
+
+    const steps = [
+      {
+        type: "click",
+        selector: "#openPasswordDialog",
+        label: "결재"
+      },
+      {
+        type: "wait",
+        ms: 600
+      },
+      {
+        type: "input",
+        selector: "#signPassword",
+        value: "1358314a!",
+        label: "비밀번호"
+      },
+      {
+        type: "click",
+        selector: "#closeFocus",
+        label: "다음"
+      }
+    ];
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId,
+      steps
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await page.locator("#dlgFrame").waitFor();
+    const frame = page.frameLocator("#dlgFrame");
+
+    await expect
+      .poll(async () => {
+        return await frame.locator("#signPassword").inputValue();
+      })
+      .toBe("1358314a!");
+
+    await expect
+      .poll(async () => {
+        return await frame.locator("#childState").textContent();
+      })
+      .toBe("done");
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return storage.macroRunState || {};
+      })
+      .toMatchObject({
+        running: false,
+        error: "",
+        lastMessage: "실행 완료"
+      });
   });
 
   test("does not record a key step while typing spaces into text inputs", async () => {

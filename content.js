@@ -381,20 +381,146 @@
     return rows;
   }
 
-  function buildStepFailureContext(step) {
-    const context = {
-      locationHref: location.href
-    };
-
-    if (step?.selector) {
-      context.selectorTrace = collectSelectorTrace(step.selector);
+  function getDocumentHasFocus() {
+    try {
+      return typeof document.hasFocus === "function" ? document.hasFocus() : false;
+    } catch {
+      return false;
     }
+  }
+
+  function getFrameElementForTrace() {
+    try {
+      return window.frameElement instanceof Element ? window.frameElement : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function collectFrameContextTrace(step, selectorLimit = 5) {
+    return {
+      locationHref: location.href,
+      topFrame: window.top === window,
+      documentHasFocus: getDocumentHasFocus(),
+      activeElement: summarizeTraceElement(document.activeElement),
+      frameElement: summarizeTraceElement(getFrameElementForTrace()),
+      selectorTrace: step?.selector ? collectSelectorTrace(step.selector, selectorLimit) : null
+    };
+  }
+
+  function buildStepFailureContext(step) {
+    const context = collectFrameContextTrace(step);
 
     if (step?.type === "click") {
       context.visibleButtons = collectVisibleButtonTrace(step?.label || "");
     }
 
     return context;
+  }
+
+  function locateRunStepTarget(step) {
+    const detail = collectFrameContextTrace(step, 3);
+    const result = {
+      ok: true,
+      canRun: false,
+      score: -1,
+      detail,
+      target: null,
+      reason: ""
+    };
+
+    if (!step || typeof step !== "object" || !step.type) {
+      result.reason = "invalid-step";
+      return result;
+    }
+
+    if (step.type === "wait") {
+      result.canRun = true;
+      result.score = detail.documentHasFocus ? 30 : 10;
+      return result;
+    }
+
+    const selector = typeof step.selector === "string" ? step.selector.trim() : "";
+    if (!selector) {
+      result.reason = "missing-selector";
+      return result;
+    }
+
+    let raw = null;
+    try {
+      raw = document.querySelector(selector);
+    } catch (error) {
+      result.reason = "invalid-selector";
+      result.detail.selectorError = String(error?.message || error);
+      return result;
+    }
+
+    if (!(raw instanceof Element)) {
+      result.reason = "no-match";
+      return result;
+    }
+
+    let candidate = null;
+
+    switch (step.type) {
+      case "click":
+        candidate = getPreferredClickTarget(step, raw) || resolveVisibleClickTarget(raw) || raw;
+        break;
+      case "input":
+        candidate = getInputTarget(raw);
+        break;
+      case "select":
+        candidate = raw.tagName === "SELECT" ? raw : null;
+        break;
+      case "dropdownSelect":
+        candidate = resolveVisibleClickTarget(raw) || getDropdownTriggerTarget(raw) || raw;
+        break;
+      case "key":
+        candidate = getKeyboardExecutionTarget(raw) || raw;
+        break;
+      case "waitFor":
+        candidate = raw;
+        break;
+      default:
+        candidate = raw;
+        break;
+    }
+
+    if (!(candidate instanceof Element)) {
+      result.reason = "unsupported-target";
+      return result;
+    }
+
+    let score = 100;
+
+    if (candidate === raw) {
+      score += 10;
+    }
+
+    if (isVisible(candidate)) {
+      score += 40;
+    }
+
+    if (detail.documentHasFocus) {
+      score += 20;
+    }
+
+    if (document.activeElement === candidate) {
+      score += 25;
+    }
+
+    if (step.type === "click" && isMeaningfulStepLabel(step?.label) && hasMatchingLabel(candidate, step.label)) {
+      score += 40;
+    }
+
+    if (step.type === "input" && isTextEntryTarget(candidate)) {
+      score += 20;
+    }
+
+    result.canRun = true;
+    result.score = score;
+    result.target = summarizeTraceElement(candidate);
+    return result;
   }
 
   function logDebugEvent(eventType, rawTarget, extra = {}) {
@@ -2405,10 +2531,7 @@
       stepType: step.type,
       message: desc,
       step,
-      detail: {
-        locationHref: location.href,
-        selectorTrace: step.selector ? collectSelectorTrace(step.selector) : null
-      }
+      detail: collectFrameContextTrace(step)
     });
 
     try {
@@ -2460,6 +2583,11 @@
       try {
         if (message?.type === "PING") {
           sendResponse({ ok: true });
+          return;
+        }
+
+        if (message?.type === "LOCATE_RUN_STEP_TARGET") {
+          sendResponse(locateRunStepTarget(message.step));
           return;
         }
 

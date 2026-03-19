@@ -50,6 +50,7 @@ function createEventRegistry() {
 function loadBackgroundHarness() {
   const storage = createStorage();
   const executeScriptCalls = [];
+  const frameIdsByTab = new Map([[1, [0]]]);
   const registries = {
     runtimeOnInstalled: createEventRegistry(),
     runtimeOnMessage: createEventRegistry(),
@@ -83,6 +84,14 @@ function loadBackgroundHarness() {
     runtime: {
       onInstalled: registries.runtimeOnInstalled,
       onMessage: registries.runtimeOnMessage
+    },
+    webNavigation: {
+      async getAllFrames({ tabId }) {
+        const frameIds = frameIdsByTab.get(tabId) || [0];
+        return frameIds.map((frameId) => ({
+          frameId
+        }));
+      }
     },
     scripting: {
       async executeScript(options) {
@@ -132,7 +141,8 @@ function loadBackgroundHarness() {
     executeScriptCalls,
     registries,
     storage: storage.state,
-    tabs
+    tabs,
+    frameIdsByTab
   };
 }
 
@@ -765,6 +775,120 @@ test("continueMacroRun repeats the full macro for the requested repeat count", a
   assert.equal(runSingleStepCalls, 2);
   assert.equal(harness.storage.macroRunState.running, false);
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료 (2회 반복)");
+});
+
+test("continueMacroRun keeps selector-based iframe steps on the matching frame", async () => {
+  const harness = loadBackgroundHarness();
+  const runStepFrames = [];
+
+  harness.tabs.set(1, {
+    id: 1,
+    url: "https://example.com/iframe-password-root.html",
+    windowId: 10,
+    status: "complete"
+  });
+  harness.frameIdsByTab.set(1, [0, 1]);
+
+  harness.chrome.tabs.sendMessage = async (tabId, message, options = {}) => {
+    const frameId = options?.frameId;
+
+    if (message.type === "PING") {
+      return {
+        ok: true
+      };
+    }
+
+    if (message.type === "LOCATE_RUN_STEP_TARGET") {
+      const selector = String(message.step?.selector || "");
+      const matchesIframe = frameId === 1 && (selector === "#signPassword" || selector === "#closeFocus");
+
+      return {
+        ok: true,
+        canRun: matchesIframe,
+        score: matchesIframe ? 180 : -1,
+        detail: {
+          locationHref: matchesIframe
+            ? "https://example.com/iframe-password-child.html"
+            : "https://example.com/iframe-password-root.html",
+          documentHasFocus: matchesIframe,
+          activeElement: null,
+          selectorTrace: {
+            selector,
+            count: matchesIframe ? 1 : 0
+          }
+        },
+        target: matchesIframe
+          ? {
+              selector,
+              visible: true
+            }
+          : null
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runStepFrames.push(frameId);
+      return {
+        ok: true,
+        message: `[${message.index + 1}] step 완료`
+      };
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "waitFor",
+        selector: "#signPassword",
+        timeout: 10000
+      },
+      {
+        type: "input",
+        selector: "#signPassword",
+        value: "1358314a!",
+        label: "비밀번호"
+      },
+      {
+        type: "wait",
+        ms: 100
+      },
+      {
+        type: "click",
+        selector: "#closeFocus",
+        label: "다음"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.deepEqual(runStepFrames, [1, 1, 1, 1]);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
 });
 
 test("STOP_MACRO_RUN clears the current run state", async () => {

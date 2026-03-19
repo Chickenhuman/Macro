@@ -138,9 +138,9 @@ function buildRunTraceLogText() {
         lines.push(`url: ${String(entry.pageUrl)}`);
       }
 
-      if (entry?.tabId != null || entry?.stepIndex != null || entry?.stepType) {
+      if (entry?.tabId != null || entry?.frameId != null || entry?.stepIndex != null || entry?.stepType) {
         lines.push(
-          `tab: ${entry?.tabId ?? "-"} / step: ${entry?.stepIndex ?? "-"} / type: ${entry?.stepType || "-"}`
+          `tab: ${entry?.tabId ?? "-"} / frame: ${entry?.frameId ?? "-"} / step: ${entry?.stepIndex ?? "-"} / type: ${entry?.stepType || "-"}`
         );
       }
 

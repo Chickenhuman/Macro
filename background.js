@@ -117,6 +117,109 @@ function isSameOriginOrHostname(url, origin, hostname) {
   return false;
 }
 
+function tryParseUrl(url, base) {
+  if (!url) return null;
+
+  try {
+    return base ? new URL(url, base) : new URL(url);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSearchParamsForMatch(searchParams) {
+  if (!(searchParams instanceof URLSearchParams)) {
+    return "";
+  }
+
+  const pairs = [...searchParams.entries()].sort(([aKey, aValue], [bKey, bValue]) => {
+    if (aKey === bKey) {
+      return String(aValue).localeCompare(String(bValue));
+    }
+
+    return String(aKey).localeCompare(String(bKey));
+  });
+  const normalized = new URLSearchParams();
+
+  for (const [key, value] of pairs) {
+    normalized.append(key, value);
+  }
+
+  const serialized = normalized.toString();
+  return serialized ? `?${serialized}` : "";
+}
+
+function normalizeUrlForMatch(url, base) {
+  const parsed = tryParseUrl(url, base);
+  if (!parsed) {
+    return "";
+  }
+
+  return `${parsed.origin}${parsed.pathname}${normalizeSearchParamsForMatch(parsed.searchParams)}`;
+}
+
+function normalizeUrlPathForMatch(url, base) {
+  const parsed = tryParseUrl(url, base);
+  if (!parsed) {
+    return "";
+  }
+
+  return `${parsed.pathname}${normalizeSearchParamsForMatch(parsed.searchParams)}`;
+}
+
+function collectFrameHintUrlCandidates(frameHint, frameInfos) {
+  const absoluteCandidates = new Set();
+  const pathCandidates = new Set();
+  const bases = new Set();
+
+  for (const frame of Array.isArray(frameInfos) ? frameInfos : []) {
+    if (frame?.url) {
+      bases.add(frame.url);
+    }
+  }
+
+  const rawLocationHref = String(frameHint?.locationHref || "");
+  const rawFrameSrc = String(frameHint?.frameSrc || "");
+
+  if (rawLocationHref) {
+    const absoluteLocationHref = normalizeUrlForMatch(rawLocationHref);
+    const locationPath = normalizeUrlPathForMatch(rawLocationHref);
+    if (absoluteLocationHref) {
+      absoluteCandidates.add(absoluteLocationHref);
+    }
+    if (locationPath) {
+      pathCandidates.add(locationPath);
+    }
+  }
+
+  if (rawFrameSrc) {
+    const absoluteFrameSrc = normalizeUrlForMatch(rawFrameSrc);
+    const frameSrcPath = normalizeUrlPathForMatch(rawFrameSrc);
+    if (absoluteFrameSrc) {
+      absoluteCandidates.add(absoluteFrameSrc);
+    }
+    if (frameSrcPath) {
+      pathCandidates.add(frameSrcPath);
+    }
+
+    for (const base of bases) {
+      const resolvedFrameSrc = normalizeUrlForMatch(rawFrameSrc, base);
+      const resolvedFrameSrcPath = normalizeUrlPathForMatch(rawFrameSrc, base);
+      if (resolvedFrameSrc) {
+        absoluteCandidates.add(resolvedFrameSrc);
+      }
+      if (resolvedFrameSrcPath) {
+        pathCandidates.add(resolvedFrameSrcPath);
+      }
+    }
+  }
+
+  return {
+    absoluteCandidates,
+    pathCandidates
+  };
+}
+
 function uniqTabIds(values) {
   return Array.from(new Set((values || []).filter(isFiniteTabId)));
 }
@@ -914,9 +1017,14 @@ function matchRunFrameHintToFrame(frameHint, frameInfos) {
     return null;
   }
 
+  const childFrames = frameInfos.filter((frame) => frame.frameId !== 0);
+  if (!childFrames.length) {
+    return null;
+  }
+
   const locationHref = String(frameHint.locationHref || "");
   if (locationHref) {
-    const exactMatch = frameInfos.find((frame) => frame.frameId !== 0 && frame.url === locationHref);
+    const exactMatch = childFrames.find((frame) => frame.url === locationHref);
     if (exactMatch) {
       return exactMatch;
     }
@@ -924,9 +1032,25 @@ function matchRunFrameHintToFrame(frameHint, frameInfos) {
 
   const frameSrc = String(frameHint.frameSrc || "");
   if (frameSrc) {
-    const srcMatch = frameInfos.find((frame) => frame.frameId !== 0 && frame.url === frameSrc);
+    const srcMatch = childFrames.find((frame) => frame.url === frameSrc);
     if (srcMatch) {
       return srcMatch;
+    }
+  }
+
+  const { absoluteCandidates, pathCandidates } = collectFrameHintUrlCandidates(frameHint, frameInfos);
+
+  if (absoluteCandidates.size) {
+    const normalizedAbsoluteMatch = childFrames.find((frame) => absoluteCandidates.has(normalizeUrlForMatch(frame.url)));
+    if (normalizedAbsoluteMatch) {
+      return normalizedAbsoluteMatch;
+    }
+  }
+
+  if (pathCandidates.size) {
+    const pathMatches = childFrames.filter((frame) => pathCandidates.has(normalizeUrlPathForMatch(frame.url)));
+    if (pathMatches.length === 1) {
+      return pathMatches[0];
     }
   }
 

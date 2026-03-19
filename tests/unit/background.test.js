@@ -140,7 +140,9 @@ function loadBackgroundHarness() {
     chrome,
     console,
     setTimeout,
-    clearTimeout
+    clearTimeout,
+    URL,
+    URLSearchParams
   });
 
   vm.runInContext(BACKGROUND_SOURCE, context, {
@@ -1328,6 +1330,149 @@ test("continueMacroRun falls back to the only direct child frame when the top fr
       {
         type: "click",
         selector: "td:nth-of-type(1) > div.PUDD.PUDD-COLOR-blue.PUDD-UI-checkbox",
+        label: "div"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.deepEqual(runStepFrames, [1]);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
+test("continueMacroRun normalizes iframe hint URLs before matching among multiple child frames", async () => {
+  const harness = loadBackgroundHarness();
+  const runStepFrames = [];
+
+  harness.tabs.set(1, {
+    id: 1,
+    url: "https://example.com/gw/bizbox.do",
+    windowId: 10,
+    status: "complete"
+  });
+  harness.frameIdsByTab.set(1, [
+    {
+      frameId: 0,
+      parentFrameId: -1,
+      url: "https://example.com/gw/bizbox.do"
+    },
+    {
+      frameId: 1,
+      parentFrameId: 0,
+      url: "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=2019042245"
+    },
+    {
+      frameId: 2,
+      parentFrameId: 0,
+      url: "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=9999999999"
+    }
+  ]);
+
+  harness.chrome.tabs.sendMessage = async (tabId, message, options = {}) => {
+    const frameId = options?.frameId;
+
+    if (message.type === "PING") {
+      return {
+        ok: true
+      };
+    }
+
+    if (message.type === "LOCATE_RUN_STEP_TARGET") {
+      if (frameId === 0) {
+        return {
+          ok: true,
+          canRun: false,
+          score: -1,
+          detail: {
+            locationHref: "https://example.com/gw/bizbox.do",
+            documentHasFocus: false,
+            activeElement: {
+              tag: "iframe",
+              id: "_content",
+              name: "_content",
+              selector: "#_content",
+              visible: true
+            },
+            activeFrameHint: {
+              frameIdAttr: "_content",
+              frameName: "_content",
+              frameSrc:
+                "/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=2019042245#list",
+              locationHref:
+                "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=2019042245#list",
+              visible: true,
+              active: true,
+              topLevel: true
+            },
+            selectorTrace: {
+              selector: message.step?.selector || "",
+              count: 0
+            }
+          },
+          target: null
+        };
+      }
+
+      return {
+        ok: true,
+        canRun: false,
+        score: -1,
+        detail: {
+          locationHref:
+            frameId === 1
+              ? "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=2019042245"
+              : "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=9999999999",
+          documentHasFocus: frameId === 1,
+          activeElement: null,
+          selectorTrace: {
+            selector: message.step?.selector || "",
+            count: 0
+          }
+        },
+        target: null
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runStepFrames.push(frameId);
+      return {
+        ok: true,
+        message: `[${message.index + 1}] step 완료`
+      };
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "tr:nth-of-type(1) > td:nth-of-type(1) > div.PUDD.PUDD-COLOR-blue.PUDD-UI-checkbox",
         label: "div"
       }
     ],

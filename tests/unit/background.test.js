@@ -1497,6 +1497,169 @@ test("continueMacroRun normalizes iframe hint URLs before matching among multipl
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
 });
 
+test("continueMacroRun retries iframe hint resolution until child frames are available", async () => {
+  const harness = loadBackgroundHarness();
+  const runStepFrames = [];
+  let getAllFramesCallCount = 0;
+
+  harness.tabs.set(1, {
+    id: 1,
+    url: "https://example.com/gw/bizbox.do",
+    windowId: 10,
+    status: "complete"
+  });
+  harness.chrome.webNavigation.getAllFrames = async ({ tabId }) => {
+    if (tabId !== 1) {
+      return [];
+    }
+
+    getAllFramesCallCount += 1;
+
+    if (getAllFramesCallCount === 1) {
+      return [
+        {
+          frameId: 0,
+          parentFrameId: -1,
+          url: "https://example.com/gw/bizbox.do"
+        }
+      ];
+    }
+
+    return [
+      {
+        frameId: 0,
+        parentFrameId: -1,
+        url: "https://example.com/gw/bizbox.do"
+      },
+      {
+        frameId: 1,
+        parentFrameId: 0,
+        url: "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=2019042245"
+      },
+      {
+        frameId: 2,
+        parentFrameId: 0,
+        url: "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=9999999999"
+      }
+    ];
+  };
+
+  harness.chrome.tabs.sendMessage = async (tabId, message, options = {}) => {
+    const frameId = options?.frameId;
+
+    if (message.type === "PING") {
+      return {
+        ok: true
+      };
+    }
+
+    if (message.type === "LOCATE_RUN_STEP_TARGET") {
+      if (frameId === 0 || typeof frameId !== "number") {
+        return {
+          ok: true,
+          canRun: false,
+          score: -1,
+          detail: {
+            locationHref: "https://example.com/gw/bizbox.do",
+            documentHasFocus: false,
+            activeElement: {
+              tag: "a",
+              id: "2019042245_anchor",
+              selector: "#\\32 019042245_anchor",
+              visible: true
+            },
+            topLevelFrameHints: [
+              {
+                frameIdAttr: "_content",
+                frameName: "_content",
+                frameSrc: "/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=2019042245",
+                locationHref:
+                  "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=2019042245",
+                visible: true,
+                active: false,
+                topLevel: true
+              }
+            ],
+            selectorTrace: {
+              selector: message.step?.selector || "",
+              count: 0
+            }
+          },
+          target: null
+        };
+      }
+
+      return {
+        ok: true,
+        canRun: false,
+        score: -1,
+        detail: {
+          locationHref:
+            frameId === 1
+              ? "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=2019042245"
+              : "https://example.com/ea/neos/edoc/delivery/receive/board/common/ReceiveBoardCommonList.do?menu_no=9999999999",
+          documentHasFocus: frameId === 1,
+          activeElement: null,
+          selectorTrace: {
+            selector: message.step?.selector || "",
+            count: 0
+          }
+        },
+        target: null
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runStepFrames.push(frameId);
+      return {
+        ok: true,
+        message: `[${message.index + 1}] step 완료`
+      };
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "td:nth-of-type(1) > div.PUDD.PUDD-COLOR-blue.PUDD-UI-checkbox",
+        label: "div"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(getAllFramesCallCount > 1, true);
+  assert.deepEqual(runStepFrames, [1]);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
 test("STOP_MACRO_RUN clears the current run state", async () => {
   const harness = loadBackgroundHarness();
   const listener = harness.registries.runtimeOnMessage.listeners[0];

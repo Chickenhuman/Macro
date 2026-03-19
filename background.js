@@ -1057,23 +1057,30 @@ function matchRunFrameHintToFrame(frameHint, frameInfos) {
   return null;
 }
 
-async function resolveRunStepFrame(tabId, step, preferredFrameId = 0) {
-  const fallbackFrameId = normalizeResolvedFrameId(preferredFrameId, 0);
+function hasIframeLikeActiveElement(detail) {
+  const tag = String(detail?.activeElement?.tag || "").toLowerCase();
+  return tag === "iframe" || tag === "frame";
+}
 
-  if (!shouldResolveRunStepFrame(step)) {
-    return {
-      frameId: fallbackFrameId,
-      candidates: [],
-      matched: false
-    };
+function responseHasRunStepFrameHints(response) {
+  const detail = response?.detail || {};
+  return (
+    Array.isArray(detail.childFrameHints) && detail.childFrameHints.length > 0 ||
+    Array.isArray(detail.topLevelFrameHints) && detail.topLevelFrameHints.length > 0 ||
+    !!detail.activeFrameHint ||
+    hasIframeLikeActiveElement(detail)
+  );
+}
+
+function shouldRetryRunStepFrameResolution(responses, fallbackFrameId = 0) {
+  if (normalizeResolvedFrameId(fallbackFrameId, 0) !== 0) {
+    return false;
   }
 
-  const frameInfos = await getTabFrames(tabId);
-  const responses = await broadcastTabMessage(tabId, {
-    type: "LOCATE_RUN_STEP_TARGET",
-    step
-  });
+  return (responses || []).some((entry) => responseHasRunStepFrameHints(entry?.response));
+}
 
+function resolveRunStepFrameWithContext(frameInfos, responses, fallbackFrameId = 0) {
   const candidates = (responses || [])
     .filter((entry) => entry?.response?.ok && entry.response.canRun)
     .map((entry) => ({
@@ -1228,6 +1235,54 @@ async function resolveRunStepFrame(tabId, step, preferredFrameId = 0) {
     candidates: candidates.map((entry) => summarizeRunFrameCandidateForTrace(entry, fallbackFrameId)),
     matched: true
   };
+}
+
+async function resolveRunStepFrame(tabId, step, preferredFrameId = 0) {
+  const fallbackFrameId = normalizeResolvedFrameId(preferredFrameId, 0);
+
+  if (!shouldResolveRunStepFrame(step)) {
+    return {
+      frameId: fallbackFrameId,
+      candidates: [],
+      matched: false
+    };
+  }
+
+  let frameInfos = await getTabFrames(tabId);
+  let responses = await broadcastTabMessage(tabId, {
+    type: "LOCATE_RUN_STEP_TARGET",
+    step
+  });
+  let resolved = resolveRunStepFrameWithContext(frameInfos, responses, fallbackFrameId);
+
+  if (resolved.matched || !shouldRetryRunStepFrameResolution(responses, fallbackFrameId)) {
+    return resolved;
+  }
+
+  const retryUntil = Date.now() + 1200;
+
+  while (Date.now() < retryUntil) {
+    await delay(150);
+
+    try {
+      await injectContentScript(tabId);
+    } catch {
+      // frame rebinding is best-effort during frame resolution retries
+    }
+
+    frameInfos = await getTabFrames(tabId);
+    responses = await broadcastTabMessage(tabId, {
+      type: "LOCATE_RUN_STEP_TARGET",
+      step
+    });
+    resolved = resolveRunStepFrameWithContext(frameInfos, responses, fallbackFrameId);
+
+    if (resolved.matched || !shouldRetryRunStepFrameResolution(responses, fallbackFrameId)) {
+      return resolved;
+    }
+  }
+
+  return resolved;
 }
 
 function collectRunDialogTabIds(runState) {

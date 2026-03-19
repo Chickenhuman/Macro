@@ -105,7 +105,7 @@
   }
 
   function getElementDisplayValue(el) {
-    if (!(el instanceof Element)) return "";
+    if (!isElementNode(el)) return "";
 
     if ("value" in el && typeof el.value === "string") {
       return normalizeText(el.value);
@@ -145,7 +145,7 @@
   }
 
   function getStableClassTokens(el) {
-    if (!(el instanceof Element) || typeof el.className !== "string") return [];
+    if (!isElementNode(el) || typeof el.className !== "string") return [];
 
     return el.className
       .split(/\s+/)
@@ -168,7 +168,7 @@
   }
 
   function getDomDistance(a, b) {
-    if (!(a instanceof Element) || !(b instanceof Element)) {
+    if (!isElementNode(a) || !isElementNode(b)) {
       return Number.POSITIVE_INFINITY;
     }
 
@@ -244,7 +244,7 @@
   ]);
 
   function summarizeElement(el) {
-    if (!(el instanceof Element)) return null;
+    if (!isElementNode(el)) return null;
 
     const text = normalizeText(el.innerText || el.textContent || el.value || "").slice(0, 80);
     const className =
@@ -263,12 +263,12 @@
   }
 
   function summarizeAncestors(el, limit = 6) {
-    if (!(el instanceof Element)) return [];
+    if (!isElementNode(el)) return [];
 
     const items = [];
     let node = el;
 
-    while (node && node !== document.documentElement && items.length < limit) {
+    while (node && node !== getElementRoot(el) && items.length < limit) {
       const summary = summarizeElement(node);
       if (summary) {
         items.push(summary);
@@ -320,7 +320,7 @@
   }
 
   function summarizeTraceElement(el) {
-    if (!(el instanceof Element)) return null;
+    if (!isElementNode(el)) return null;
 
     return {
       ...summarizeElement(el),
@@ -331,7 +331,7 @@
   }
 
   function buildFrameHint(frameElement, extra = {}) {
-    if (!(frameElement instanceof HTMLIFrameElement || frameElement instanceof HTMLFrameElement)) {
+    if (!isFrameElementNode(frameElement)) {
       return null;
     }
 
@@ -403,11 +403,9 @@
     }
 
     const frameElements = [...currentDocument.querySelectorAll("iframe, frame")];
-    const activeFrameElement =
-      currentDocument.activeElement instanceof HTMLIFrameElement ||
-      currentDocument.activeElement instanceof HTMLFrameElement
-        ? currentDocument.activeElement
-        : null;
+    const activeFrameElement = isFrameElementNode(currentDocument.activeElement)
+      ? currentDocument.activeElement
+      : null;
     const orderedFrames = activeFrameElement
       ? [activeFrameElement, ...frameElements.filter((frame) => frame !== activeFrameElement)]
       : frameElements;
@@ -491,7 +489,7 @@
 
     for (const node of document.querySelectorAll(BUTTON_LIKE_CANDIDATE_SELECTOR)) {
       const candidate = getClickableTarget(node);
-      if (!(candidate instanceof Element)) continue;
+      if (!isElementNode(candidate)) continue;
       if (seen.has(candidate)) continue;
       seen.add(candidate);
       if (!isButtonLikeElement(candidate) || !isVisible(candidate)) continue;
@@ -520,7 +518,7 @@
 
   function getFrameElementForTrace() {
     try {
-      return window.frameElement instanceof Element ? window.frameElement : null;
+      return isElementNode(window.frameElement) ? window.frameElement : null;
     } catch {
       return null;
     }
@@ -592,7 +590,7 @@
       return result;
     }
 
-    if (!(raw instanceof Element)) {
+    if (!isElementNode(raw)) {
       result.reason = "no-match";
       if (window.top === window) {
         result.detail.childFrameHints = collectChildFrameHintsForSelector(selector);
@@ -626,7 +624,7 @@
         break;
     }
 
-    if (!(candidate instanceof Element)) {
+    if (!isElementNode(candidate)) {
       result.reason = "unsupported-target";
       return result;
     }
@@ -666,7 +664,7 @@
   function logDebugEvent(eventType, rawTarget, extra = {}) {
     if (!debugMode) return;
 
-    const target = rawTarget instanceof Element ? rawTarget : null;
+    const target = isElementNode(rawTarget) ? rawTarget : null;
     const checkboxTarget = target ? findCheckboxLikeWrapper(target) : null;
     const dropdownTarget = target ? getDropdownTriggerTarget(target) : null;
     const clickableTarget = target ? getClickableTarget(target) : null;
@@ -700,15 +698,16 @@
   }
 
   function isDropdownLikeElement(el) {
-    if (!(el instanceof Element)) return false;
+    if (!isElementNode(el)) return false;
     if (el.tagName === "SELECT") return false;
 
     return el.matches(DROPDOWN_TRIGGER_SELECTOR) || hasDropdownLikeClassName(el);
   }
 
   function isBroadDropdownContainer(el) {
-    if (!(el instanceof Element)) return true;
-    if (el === document.body || el === document.documentElement) return true;
+    if (!isElementNode(el)) return true;
+    const ownerDocument = getElementDocument(el);
+    if (el === ownerDocument.body || el === ownerDocument.documentElement) return true;
     if (el.matches("body, html, form, table, tbody, thead, tfoot, ul, ol")) return true;
     if ((el.childElementCount || 0) > 10) return true;
 
@@ -719,7 +718,7 @@
   }
 
   function isElementNearReference(candidate, referenceEl) {
-    if (!(candidate instanceof Element) || !(referenceEl instanceof Element)) {
+    if (!isElementNode(candidate) || !isElementNode(referenceEl)) {
       return false;
     }
 
@@ -756,7 +755,7 @@
   }
 
   function findOwnedDropdownControl(root, referenceEl, maxDepth = 2) {
-    if (!(root instanceof Element) || isBroadDropdownContainer(root)) return null;
+    if (!isElementNode(root) || isBroadDropdownContainer(root)) return null;
 
     const queue = [...root.children].map((child) => ({ node: child, depth: 1 }));
     let found = null;
@@ -783,12 +782,13 @@
   }
 
   function getDropdownTriggerTarget(rawTarget) {
-    if (!(rawTarget instanceof Element)) return null;
+    if (!isElementNode(rawTarget)) return null;
 
     let node = rawTarget;
     let depth = 0;
+    const rootElement = getElementRoot(rawTarget);
 
-    while (node && node !== document.documentElement && depth < 6) {
+    while (node && node !== rootElement && depth < 6) {
       if (isDropdownLikeElement(node)) {
         return node;
       }
@@ -806,12 +806,13 @@
   }
 
   function findNearbyButtonLikeTarget(referenceEl, maxDepth = 3) {
-    if (!(referenceEl instanceof Element)) return null;
+    if (!isElementNode(referenceEl)) return null;
 
     let node = referenceEl;
     let depth = 0;
+    const rootElement = getElementRoot(referenceEl);
 
-    while (node && node !== document.documentElement && depth < maxDepth) {
+    while (node && node !== rootElement && depth < maxDepth) {
       const parent = node.parentElement;
       if (!parent || isBroadDropdownContainer(parent)) {
         node = parent;
@@ -879,6 +880,141 @@
       // dropdown value tracking is best-effort during recording
     });
     return true;
+  }
+
+  function isElementNode(value) {
+    return !!value && (
+      value instanceof Element ||
+      (value.nodeType === 1 && typeof value.tagName === "string")
+    );
+  }
+
+  function isFrameElementNode(value) {
+    return isElementNode(value) && /^(iframe|frame)$/i.test(String(value.tagName || ""));
+  }
+
+  function getElementDocument(value) {
+    return isElementNode(value) ? value.ownerDocument || document : document;
+  }
+
+  function getElementRoot(value) {
+    return getElementDocument(value)?.documentElement || document.documentElement;
+  }
+
+  function getElementWindow(value) {
+    return getElementDocument(value)?.defaultView || window;
+  }
+
+  function createUiEvent(target, type, init = {}) {
+    const eventWindow = getElementWindow(target);
+    const EventCtor = eventWindow?.Event || Event;
+    return new EventCtor(type, init);
+  }
+
+  function createMouseEventForElement(target, type, init = {}) {
+    const eventWindow = getElementWindow(target);
+    const MouseEventCtor = eventWindow?.MouseEvent || MouseEvent;
+    return new MouseEventCtor(type, {
+      bubbles: true,
+      cancelable: true,
+      ...init
+    });
+  }
+
+  function querySelectorDeep(selector, rootWindow = window, depth = 0, visited = new Set()) {
+    if (!selector || depth > 4) {
+      return null;
+    }
+
+    let currentDocument = null;
+    try {
+      currentDocument = rootWindow.document;
+      void currentDocument?.querySelectorAll;
+    } catch {
+      return null;
+    }
+
+    const directMatch = currentDocument.querySelector(selector);
+    if (directMatch) {
+      return directMatch;
+    }
+
+    const frameElements = [...currentDocument.querySelectorAll("iframe, frame")];
+    const activeFrameElement = isFrameElementNode(currentDocument.activeElement)
+      ? currentDocument.activeElement
+      : null;
+    const orderedFrames = activeFrameElement
+      ? [activeFrameElement, ...frameElements.filter((frame) => frame !== activeFrameElement)]
+      : frameElements;
+
+    for (const frameElement of orderedFrames) {
+      let childWindow = null;
+      let childDocument = null;
+
+      try {
+        childWindow = frameElement.contentWindow;
+        childDocument = childWindow?.document;
+        if (!childWindow || !childDocument || visited.has(childWindow)) {
+          continue;
+        }
+        void childDocument.querySelectorAll;
+      } catch {
+        continue;
+      }
+
+      visited.add(childWindow);
+      const nestedMatch = querySelectorDeep(selector, childWindow, depth + 1, visited);
+      if (nestedMatch) {
+        return nestedMatch;
+      }
+    }
+
+    return null;
+  }
+
+  function collectQuerySelectorAllDeep(selector, rootWindow = window, depth = 0, results = [], visited = new Set()) {
+    if (!selector || depth > 4) {
+      return results;
+    }
+
+    let currentDocument = null;
+    try {
+      currentDocument = rootWindow.document;
+      void currentDocument?.querySelectorAll;
+    } catch {
+      return results;
+    }
+
+    results.push(...currentDocument.querySelectorAll(selector));
+
+    const frameElements = [...currentDocument.querySelectorAll("iframe, frame")];
+    const activeFrameElement = isFrameElementNode(currentDocument.activeElement)
+      ? currentDocument.activeElement
+      : null;
+    const orderedFrames = activeFrameElement
+      ? [activeFrameElement, ...frameElements.filter((frame) => frame !== activeFrameElement)]
+      : frameElements;
+
+    for (const frameElement of orderedFrames) {
+      let childWindow = null;
+      let childDocument = null;
+
+      try {
+        childWindow = frameElement.contentWindow;
+        childDocument = childWindow?.document;
+        if (!childWindow || !childDocument || visited.has(childWindow)) {
+          continue;
+        }
+        void childDocument.querySelectorAll;
+      } catch {
+        continue;
+      }
+
+      visited.add(childWindow);
+      collectQuerySelectorAllDeep(selector, childWindow, depth + 1, results, visited);
+    }
+
+    return results;
   }
 
   async function tryRecordPendingDropdownChange() {
@@ -1228,7 +1364,7 @@
   }
 
   function bindRecordingFrame(iframe) {
-    if (!(iframe instanceof Element)) return;
+    if (!isElementNode(iframe)) return;
     if (iframe.tagName !== "IFRAME") return;
     if (observedRecordingFrames.has(iframe)) return;
 
@@ -1246,7 +1382,7 @@
   }
 
   function bindRecordingFramesWithin(node) {
-    if (!(node instanceof Element)) return false;
+    if (!isElementNode(node)) return false;
 
     let found = false;
 
@@ -1270,7 +1406,7 @@
     }
 
     const root = document.documentElement || document.body;
-    if (!(root instanceof Element)) {
+    if (!isElementNode(root)) {
       return;
     }
 
@@ -1283,7 +1419,7 @@
 
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes || []) {
-          if (!(node instanceof Element)) continue;
+          if (!isElementNode(node)) continue;
 
           if (bindRecordingFramesWithin(node)) {
             foundFrame = true;
@@ -1519,7 +1655,7 @@
   }
 
   function findCheckboxLikeWrapper(el) {
-    if (!(el instanceof Element)) return null;
+    if (!isElementNode(el)) return null;
 
     const wrapper = el.closest(
       ".PUDD-UI-checkbox, .PUDDCheckBoxWrap, label, [role='checkbox'], [role='radio'], [aria-checked]"
@@ -1555,7 +1691,7 @@
   }
 
   function isButtonLikeElement(el) {
-    if (!(el instanceof Element)) return false;
+    if (!isElementNode(el)) return false;
 
     if (
       el.matches(
@@ -1572,10 +1708,11 @@
     const seen = new Set();
     let best = null;
     let bestScore = -1;
+    const searchDocument = isElementNode(referenceEl) ? getElementDocument(referenceEl) : document;
 
-    for (const node of document.querySelectorAll(BUTTON_LIKE_CANDIDATE_SELECTOR)) {
+    for (const node of searchDocument.querySelectorAll(BUTTON_LIKE_CANDIDATE_SELECTOR)) {
       const candidate = getClickableTarget(node);
-      if (!(candidate instanceof Element)) continue;
+      if (!isElementNode(candidate)) continue;
       if (!isButtonLikeElement(candidate)) continue;
       if (!isVisible(candidate)) continue;
       if (seen.has(candidate)) continue;
@@ -1585,7 +1722,7 @@
       if (labelScore < 0) continue;
 
       let score = labelScore;
-      if (referenceEl instanceof Element) {
+      if (isElementNode(referenceEl)) {
         if (candidate.tagName === referenceEl.tagName) {
           score += 30;
         }
@@ -1614,7 +1751,7 @@
   }
 
   function findOptionLikeClickTarget(rawTarget) {
-    if (!(rawTarget instanceof Element)) return null;
+    if (!isElementNode(rawTarget)) return null;
 
     const optionTarget = rawTarget.closest(
       "[role='option'], [role='treeitem'], [role='menuitem'], a.anchor, a[role='option']"
@@ -1640,7 +1777,7 @@
   }
 
   function getClickableTarget(rawTarget) {
-    if (!(rawTarget instanceof Element)) return null;
+    if (!isElementNode(rawTarget)) return null;
 
     const checkboxWrapper = findCheckboxLikeWrapper(rawTarget);
     if (checkboxWrapper) {
@@ -1653,7 +1790,8 @@
     }
 
     let node = rawTarget;
-    while (node && node !== document.documentElement) {
+    const rootElement = getElementRoot(rawTarget);
+    while (node && node !== rootElement) {
       if (isButtonLikeElement(node)) {
         return node;
       }
@@ -1664,7 +1802,7 @@
   }
 
   function getInputTarget(rawTarget) {
-    if (!(rawTarget instanceof Element)) return null;
+    if (!isElementNode(rawTarget)) return null;
 
     const el = rawTarget.closest("input, textarea, select");
     if (!el) return null;
@@ -1684,13 +1822,13 @@
   }
 
   function isTextEntryTarget(el) {
-    if (!(el instanceof Element)) return false;
+    if (!isElementNode(el)) return false;
 
-    if (el instanceof HTMLTextAreaElement) {
+    if (el.tagName === "TEXTAREA") {
       return true;
     }
 
-    if (el instanceof HTMLInputElement) {
+    if (el.tagName === "INPUT") {
       const type = (el.getAttribute("type") || "text").toLowerCase();
       return ![
         "button",
@@ -1710,7 +1848,7 @@
   }
 
   function isKeyboardActionCandidate(el) {
-    if (!(el instanceof Element)) return false;
+    if (!isElementNode(el)) return false;
     if (isTextEntryTarget(el)) return false;
 
     if (findCheckboxLikeWrapper(el)) {
@@ -1727,7 +1865,7 @@
   }
 
   function getKeyboardTarget(rawTarget) {
-    if (!(rawTarget instanceof Element)) return null;
+    if (!isElementNode(rawTarget)) return null;
 
     if (isTextEntryTarget(rawTarget)) {
       return null;
@@ -1990,7 +2128,7 @@
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < timeout) {
-      const el = document.querySelector(selector);
+      const el = querySelectorDeep(selector);
       if (el) return el;
       await delay(interval);
     }
@@ -1999,16 +2137,16 @@
   }
 
   function requiresVisibleOptionTarget(el) {
-    if (!(el instanceof Element)) return false;
+    if (!isElementNode(el)) return false;
 
     return findOptionLikeClickTarget(el) === el;
   }
 
   function isVisible(el) {
-    if (!el) return false;
+    if (!isElementNode(el)) return false;
 
     const rect = el.getBoundingClientRect();
-    const style = window.getComputedStyle(el);
+    const style = getElementWindow(el).getComputedStyle(el);
 
     return (
       rect.width > 0 &&
@@ -2057,7 +2195,7 @@
   }
 
   function getPreferredClickTarget(step, raw) {
-    if (!(raw instanceof Element)) return null;
+    if (!isElementNode(raw)) return null;
 
     if (isCheckboxLikeElement(raw)) {
       return raw;
@@ -2088,7 +2226,7 @@
     let lastFound = null;
 
     while (Date.now() - startedAt < timeout) {
-      const raw = document.querySelector(step.selector);
+      const raw = querySelectorDeep(step.selector);
       if (raw) {
         lastFound = raw;
         const preferred = getPreferredClickTarget(step, raw);
@@ -2114,20 +2252,20 @@
   }
 
   function fireMouseSequence(el) {
-    el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-    el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(createMouseEventForElement(el, "mouseover"));
+    el.dispatchEvent(createMouseEventForElement(el, "mousedown"));
+    el.dispatchEvent(createMouseEventForElement(el, "mouseup"));
 
     if (typeof el.click === "function") {
       el.click();
       return;
     }
 
-    el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(createMouseEventForElement(el, "click"));
   }
 
   function isNativeDirectClickElement(el) {
-    if (!(el instanceof Element)) return false;
+    if (!isElementNode(el)) return false;
 
     return el.matches("button, input[type='button'], input[type='submit'], input[type='reset']");
   }
@@ -2163,7 +2301,7 @@
   }
 
   function isCheckboxLikeElement(el) {
-    if (!(el instanceof Element)) return false;
+    if (!isElementNode(el)) return false;
 
     return (
       el.matches(
@@ -2176,7 +2314,7 @@
   }
 
   function getCheckboxExecutionTarget(el) {
-    if (!(el instanceof Element)) return null;
+    if (!isElementNode(el)) return null;
 
     const wrapper = el.matches(
       ".PUDD-UI-checkbox, .PUDDCheckBoxWrap, label, [role='checkbox'], [role='radio'], [aria-checked]"
@@ -2216,8 +2354,8 @@
 
       input.focus?.();
       input.click();
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(createUiEvent(input, "input", { bubbles: true }));
+      input.dispatchEvent(createUiEvent(input, "change", { bubbles: true }));
 
       await delay(120);
 
@@ -2244,7 +2382,7 @@
   }
 
   function getKeyboardExecutionTarget(el) {
-    if (!(el instanceof Element)) return null;
+    if (!isElementNode(el)) return null;
 
     const checkboxTarget = getCheckboxExecutionTarget(el);
     if (checkboxTarget?.input) {
@@ -2254,15 +2392,16 @@
     return resolveVisibleClickTarget(el) || el;
   }
 
-  function createKeyboardEvent(type, step) {
+  function createKeyboardEvent(type, step, targetWindow = window) {
     const key =
       step?.type === "key" || step?.key === " " || step?.code === "Space"
         ? " "
         : String(step?.key || "");
     const code = step?.code || (key === " " ? "Space" : "");
     const keyCode = code === "Space" ? 32 : 0;
+    const KeyboardEventCtor = targetWindow?.KeyboardEvent || KeyboardEvent;
 
-    return new KeyboardEvent(type, {
+    return new KeyboardEventCtor(type, {
       key,
       code,
       keyCode,
@@ -2275,9 +2414,10 @@
   }
 
   function dispatchKeySequence(el, step) {
-    const keydownAllowed = el.dispatchEvent(createKeyboardEvent("keydown", step));
-    const keypressAllowed = el.dispatchEvent(createKeyboardEvent("keypress", step));
-    const keyupAllowed = el.dispatchEvent(createKeyboardEvent("keyup", step));
+    const targetWindow = getElementWindow(el);
+    const keydownAllowed = el.dispatchEvent(createKeyboardEvent("keydown", step, targetWindow));
+    const keypressAllowed = el.dispatchEvent(createKeyboardEvent("keypress", step, targetWindow));
+    const keyupAllowed = el.dispatchEvent(createKeyboardEvent("keyup", step, targetWindow));
 
     return {
       keydownAllowed,
@@ -2287,7 +2427,7 @@
   }
 
   function isNativeSpaceActivatableElement(el) {
-    if (!(el instanceof Element)) return false;
+    if (!isElementNode(el)) return false;
 
     return el.matches(
       "button, summary, input[type='button'], input[type='submit'], input[type='reset'], input[type='checkbox'], input[type='radio']"
@@ -2295,10 +2435,11 @@
   }
 
   function setInputValue(el, value) {
+    const targetWindow = getElementWindow(el);
     const proto =
       el.tagName === "TEXTAREA"
-        ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype;
+        ? targetWindow.HTMLTextAreaElement?.prototype || HTMLTextAreaElement.prototype
+        : targetWindow.HTMLInputElement?.prototype || HTMLInputElement.prototype;
 
     const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
     if (descriptor && typeof descriptor.set === "function") {
@@ -2309,7 +2450,11 @@
   }
 
   function setSelectValue(el, value) {
-    const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+    const targetWindow = getElementWindow(el);
+    const descriptor = Object.getOwnPropertyDescriptor(
+      targetWindow.HTMLSelectElement?.prototype || HTMLSelectElement.prototype,
+      "value"
+    );
     if (descriptor && typeof descriptor.set === "function") {
       descriptor.set.call(el, value);
     } else {
@@ -2318,7 +2463,7 @@
   }
 
   function isDropdownOptionCandidate(el) {
-    if (!(el instanceof Element)) return false;
+    if (!isElementNode(el)) return false;
 
     if (
       el.matches(
@@ -2379,7 +2524,7 @@
   }
 
   function scoreDropdownOptionCandidate(el, expected) {
-    if (!(el instanceof Element)) return -1;
+    if (!isElementNode(el)) return -1;
     if (!isVisible(el)) return -1;
 
     const text = normalizeText(el.innerText || el.textContent || "");
@@ -2417,7 +2562,7 @@
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < timeout) {
-      const candidates = [...document.querySelectorAll("body *")];
+      const candidates = collectQuerySelectorAllDeep("body *");
       let best = null;
       let bestScore = -1;
 
@@ -2538,7 +2683,7 @@
 
     await delay(250);
 
-    if (prefersMainWorldDirectClick(el) && typeof el.click === "function") {
+    if (getElementDocument(el) === document && prefersMainWorldDirectClick(el) && typeof el.click === "function") {
       await appendRunTraceLog({
         eventType: "click-dispatch",
         stepType: step.type,
@@ -2652,8 +2797,8 @@
 
     el.focus?.();
     setInputValue(el, step.value ?? "");
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(createUiEvent(el, "input", { bubbles: true }));
+    el.dispatchEvent(createUiEvent(el, "change", { bubbles: true }));
     await delay(200);
   }
 
@@ -2666,8 +2811,8 @@
 
     el.focus?.();
     setSelectValue(el, step.value ?? "");
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(createUiEvent(el, "input", { bubbles: true }));
+    el.dispatchEvent(createUiEvent(el, "change", { bubbles: true }));
     await delay(200);
   }
 
@@ -2827,7 +2972,10 @@
     Object.assign(window.__EASY_WEB_MACRO_TEST_HOOKS__, {
       appendRecordedStepsDirectly,
       isRetryableRuntimeMessageError,
-      persistRecordedSteps
+      persistRecordedSteps,
+      isElementNode,
+      querySelectorDeep,
+      collectQuerySelectorAllDeep
     });
   }
 })();

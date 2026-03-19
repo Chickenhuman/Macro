@@ -138,6 +138,8 @@ function loadContentHarness({ sendMessageImpl, initialStorage } = {}) {
     filename: CONTENT_PATH
   });
 
+  window.document = document;
+
   return {
     chrome,
     hooks,
@@ -228,4 +230,75 @@ test("persistRecordedSteps preserves key step metadata during storage fallback",
   await harness.hooks.persistRecordedSteps([step]);
 
   assert.deepEqual(normalize(harness.storage.macroSteps), [step]);
+});
+
+test("querySelectorDeep finds same-origin iframe descendants from the top frame", () => {
+  const harness = loadContentHarness();
+
+  const childTarget = {
+    nodeType: 1,
+    tagName: "DIV",
+    ownerDocument: null
+  };
+
+  const childDocument = {
+    activeElement: null,
+    defaultView: null,
+    querySelector(selector) {
+      return selector === "#rowCheckWrap" ? childTarget : null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "iframe, frame") {
+        return [];
+      }
+
+      if (selector === "body *") {
+        return [childTarget];
+      }
+
+      return [];
+    }
+  };
+  const childWindow = {
+    document: childDocument
+  };
+  childDocument.defaultView = childWindow;
+  childTarget.ownerDocument = childDocument;
+
+  const frameElement = {
+    nodeType: 1,
+    tagName: "IFRAME",
+    contentWindow: childWindow
+  };
+
+  const topDocument = {
+    activeElement: null,
+    defaultView: null,
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "iframe, frame") {
+        return [frameElement];
+      }
+
+      if (selector === "body *") {
+        return [];
+      }
+
+      return [];
+    }
+  };
+  const topWindow = {
+    document: topDocument
+  };
+  topDocument.defaultView = topWindow;
+  frameElement.ownerDocument = topDocument;
+
+  assert.equal(harness.hooks.isElementNode(childTarget), true);
+  assert.equal(harness.hooks.querySelectorDeep("#rowCheckWrap", topWindow), childTarget);
+  const deepMatches = harness.hooks.collectQuerySelectorAllDeep("body *", topWindow);
+  assert.equal(Array.isArray(deepMatches), true);
+  assert.equal(deepMatches.length, 1);
+  assert.equal(deepMatches[0], childTarget);
 });

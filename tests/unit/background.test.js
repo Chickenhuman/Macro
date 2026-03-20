@@ -1112,6 +1112,9 @@ test("GET_DATA backfills legacy key steps without key metadata", async () => {
       message: "매크로 실행 시작"
     }
   ];
+  harness.storage.macroRunTraceState = {
+    enabled: false
+  };
 
   const response = await dispatchRuntimeMessage(listener, {
     type: "GET_DATA"
@@ -1128,7 +1131,64 @@ test("GET_DATA backfills legacy key steps without key metadata", async () => {
     }
   ]);
   assert.deepEqual(normalize(response.runTraceLogs), normalize(harness.storage.macroRunTraceLogs));
+  assert.deepEqual(normalize(response.runTrace), {
+    enabled: false
+  });
   assert.deepEqual(normalize(harness.storage.macroSteps), normalize(response.steps));
+});
+
+test("SET_RUN_TRACE_STATE updates the global run trace mode", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  const response = await dispatchRuntimeMessage(listener, {
+    type: "SET_RUN_TRACE_STATE",
+    enabled: false
+  });
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(normalize(response.runTrace), {
+    enabled: false
+  });
+  assert.deepEqual(normalize(harness.storage.macroRunTraceState), {
+    enabled: false
+  });
+});
+
+test("APPEND_RUN_TRACE_LOG does not store entries when run trace is disabled", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  harness.storage.macroRunTraceState = {
+    enabled: false
+  };
+  harness.storage.macroRunTraceLogs = [
+    {
+      at: 1,
+      source: "run:background",
+      eventType: "existing",
+      message: "keep"
+    }
+  ];
+
+  const response = await dispatchRuntimeMessage(listener, {
+    type: "APPEND_RUN_TRACE_LOG",
+    entry: {
+      source: "content:run",
+      eventType: "step-start",
+      message: "skip me"
+    }
+  });
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(normalize(harness.storage.macroRunTraceLogs), [
+    {
+      at: 1,
+      source: "run:background",
+      eventType: "existing",
+      message: "keep"
+    }
+  ]);
 });
 
 test("handleRunRelatedTab completes waitForPopup when the current tab reloads to the expected URL", async () => {

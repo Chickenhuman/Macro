@@ -5,6 +5,7 @@ const RUN_KEY = "macroRunState";
 const ERROR_LOGS_KEY = "macroErrorLogs";
 const DEBUG_STATE_KEY = "macroDebugState";
 const DEBUG_LOGS_KEY = "macroDebugLogs";
+const RUN_TRACE_STATE_KEY = "macroRunTraceState";
 const RUN_TRACE_LOGS_KEY = "macroRunTraceLogs";
 const POPUP_WAIT_ALARM = "macroPopupWaitTimeout";
 
@@ -57,11 +58,16 @@ const DEFAULT_DEBUG_STATE = {
   enabled: false
 };
 
+const DEFAULT_RUN_TRACE_STATE = {
+  enabled: true
+};
+
 let continueMacroRunInFlight = false;
 let continueMacroRunQueued = false;
 let continueMacroRunQueuedState = undefined;
 let continueMacroRunQueuedStateSet = false;
 let appendStepsInFlight = Promise.resolve();
+let runTraceStateCache = null;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -520,6 +526,42 @@ async function setDebugState(state) {
   return nextState;
 }
 
+async function getRunTraceState(forceRefresh = false) {
+  if (!forceRefresh && runTraceStateCache) {
+    return {
+      ...DEFAULT_RUN_TRACE_STATE,
+      ...runTraceStateCache
+    };
+  }
+
+  const data = await chrome.storage.local.get(RUN_TRACE_STATE_KEY);
+  runTraceStateCache = {
+    ...DEFAULT_RUN_TRACE_STATE,
+    ...(data[RUN_TRACE_STATE_KEY] || {})
+  };
+
+  runTraceStateCache.enabled = !!runTraceStateCache.enabled;
+  return {
+    ...runTraceStateCache
+  };
+}
+
+async function setRunTraceState(state) {
+  const nextState = {
+    ...DEFAULT_RUN_TRACE_STATE,
+    ...(state || {})
+  };
+
+  nextState.enabled = !!nextState.enabled;
+  runTraceStateCache = nextState;
+
+  await chrome.storage.local.set({
+    [RUN_TRACE_STATE_KEY]: nextState
+  });
+
+  return nextState;
+}
+
 async function getErrorLogs() {
   const data = await chrome.storage.local.get(ERROR_LOGS_KEY);
   return Array.isArray(data[ERROR_LOGS_KEY]) ? data[ERROR_LOGS_KEY] : [];
@@ -598,6 +640,11 @@ async function appendDebugLog(entry) {
 }
 
 async function appendRunTraceLog(entry) {
+  const runTraceState = await getRunTraceState();
+  if (!runTraceState.enabled) {
+    return [];
+  }
+
   const current = await getRunTraceLogs();
   const nextEntry = {
     at: Date.now(),
@@ -1551,6 +1598,22 @@ async function broadcastDebugMode(enabled) {
     try {
       await broadcastTabMessage(tabId, {
         type: "SET_DEBUG_MODE",
+        enabled: !!enabled
+      });
+    } catch {
+      // ignore missing or unloaded content scripts
+    }
+  }
+}
+
+async function broadcastRunTraceMode(enabled) {
+  const runState = await getRunState();
+  const tabIds = collectRunDialogTabIds(runState);
+
+  for (const tabId of tabIds) {
+    try {
+      await broadcastTabMessage(tabId, {
+        type: "SET_RUN_TRACE_MODE",
         enabled: !!enabled
       });
     } catch {
@@ -2780,7 +2843,8 @@ async function continueMacroRunInternal(passedState) {
         type: "RUN_SINGLE_STEP",
         step,
         index: runState.stepIndex,
-        hideRunOverlay: !!runState.hideRunOverlay
+        hideRunOverlay: !!runState.hideRunOverlay,
+        runTraceEnabled: (await getRunTraceState()).enabled
       }, dispatchFrameId);
 
       if (!response?.ok) {
@@ -3032,6 +3096,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     RUN_KEY,
     ERROR_LOGS_KEY,
     DEBUG_STATE_KEY,
+    RUN_TRACE_STATE_KEY,
     DEBUG_LOGS_KEY,
     RUN_TRACE_LOGS_KEY
   ]);
@@ -3056,8 +3121,14 @@ chrome.runtime.onInstalled.addListener(async () => {
     await setErrorLogs([]);
   }
 
-  if (!data[DEBUG_STATE_KEY]) {
-    await setDebugState(DEFAULT_DEBUG_STATE);
+    if (!data[DEBUG_STATE_KEY]) {
+      await setDebugState(DEFAULT_DEBUG_STATE);
+    }
+
+  if (!data[RUN_TRACE_STATE_KEY]) {
+    await setRunTraceState(DEFAULT_RUN_TRACE_STATE);
+  } else {
+    await getRunTraceState(true);
   }
 
   if (!Array.isArray(data[DEBUG_LOGS_KEY])) {
@@ -3244,7 +3315,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       switch (message?.type) {
         case "GET_DATA": {
-          const [steps, savedMacros, recording, runState, errorLogs, debug, debugLogs, runTraceLogs] =
+          const [steps, savedMacros, recording, runState, errorLogs, debug, runTrace, debugLogs, runTraceLogs] =
             await Promise.all([
             getSteps(),
             getSavedMacros(),
@@ -3252,6 +3323,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             getRunState(),
             getErrorLogs(),
             getDebugState(),
+            getRunTraceState(),
             getDebugLogs(),
             getRunTraceLogs()
           ]);
@@ -3264,6 +3336,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             run: runState,
             errorLogs,
             debug,
+            runTrace,
             debugLogs,
             runTraceLogs
           });
@@ -3604,6 +3677,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({
             ok: true,
             debug
+          });
+          return;
+        }
+
+        case "SET_RUN_TRACE_STATE": {
+          const runTrace = await setRunTraceState({
+            enabled: !!message.enabled
+          });
+
+          await broadcastRunTraceMode(runTrace.enabled);
+
+          sendResponse({
+            ok: true,
+            runTrace
           });
           return;
         }

@@ -6,6 +6,7 @@
 
   let recordMode = false;
   let debugMode = false;
+  let runTraceMode = true;
   let lastRecordedAt = null;
   let overlayRoot = null;
   let overlayTitle = null;
@@ -311,6 +312,8 @@
   }
 
   async function appendRunTraceLog(entry) {
+    if (!runTraceMode) return;
+
     try {
       await chrome.runtime.sendMessage({
         type: "APPEND_RUN_TRACE_LOG",
@@ -2886,6 +2889,7 @@
       throw new Error("step에 type이 없습니다.");
     }
 
+    runTraceMode = options.runTraceEnabled !== false;
     const desc = describeStep(step, index);
     if (options.hideRunOverlay) {
       removeOverlay();
@@ -2981,9 +2985,16 @@
           return;
         }
 
+        if (message?.type === "SET_RUN_TRACE_MODE") {
+          runTraceMode = !!message.enabled;
+          sendResponse({ ok: true });
+          return;
+        }
+
         if (message?.type === "RUN_SINGLE_STEP") {
           const result = await runSingleStep(message.step, message.index || 0, {
-            hideRunOverlay: !!message.hideRunOverlay
+            hideRunOverlay: !!message.hideRunOverlay,
+            runTraceEnabled: message.runTraceEnabled !== false
           });
           sendResponse({
             ok: true,

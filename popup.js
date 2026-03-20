@@ -33,6 +33,7 @@ const errorLogBox = document.getElementById("errorLogBox");
 const copyRunTraceLogBtn = document.getElementById("copyRunTraceLogBtn");
 const clearRunTraceLogBtn = document.getElementById("clearRunTraceLogBtn");
 const refreshRunTraceLogBtn = document.getElementById("refreshRunTraceLogBtn");
+const toggleRunTraceBtn = document.getElementById("toggleRunTraceBtn");
 const runTraceLogBox = document.getElementById("runTraceLogBox");
 const toggleDebugBtn = document.getElementById("toggleDebugBtn");
 const copyDebugLogBtn = document.getElementById("copyDebugLogBtn");
@@ -63,6 +64,9 @@ let currentData = {
     hideRunOverlay: false
   },
   errorLogs: [],
+  runTrace: {
+    enabled: true
+  },
   runTraceLogs: [],
   debug: {
     enabled: false
@@ -126,7 +130,7 @@ function buildErrorLogText() {
 function buildRunTraceLogText() {
   const logs = Array.isArray(currentData.runTraceLogs) ? currentData.runTraceLogs : [];
   if (!logs.length) {
-    return "실행 추적 없음";
+    return currentData.runTrace?.enabled ? "실행 추적 없음" : "실행 추적 중지됨";
   }
 
   return [...logs]
@@ -214,6 +218,8 @@ function renderErrorLogs() {
 
 function renderRunTraceLogs() {
   runTraceLogBox.textContent = buildRunTraceLogText();
+  toggleRunTraceBtn.textContent = currentData.runTrace?.enabled ? "실행 추적 중지" : "실행 추적 시작";
+  toggleRunTraceBtn.classList.toggle("primary", !!currentData.runTrace?.enabled);
 }
 
 function renderDebugLogs() {
@@ -390,6 +396,22 @@ async function clearRunTraceLogs() {
   });
 
   currentData.runTraceLogs = [];
+  renderRunTraceLogs();
+}
+
+async function setRunTraceState(enabled) {
+  const response = await sendRuntimeMessage({
+    type: "SET_RUN_TRACE_STATE",
+    enabled: !!enabled
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.message || "실행 추적 상태 변경 실패");
+  }
+
+  currentData.runTrace = response.runTrace || {
+    enabled: !!enabled
+  };
   renderRunTraceLogs();
 }
 
@@ -948,6 +970,9 @@ async function loadData() {
         hideRunOverlay: false
       },
       errorLogs: Array.isArray(response.errorLogs) ? response.errorLogs : [],
+      runTrace: response.runTrace || {
+        enabled: true
+      },
       runTraceLogs: Array.isArray(response.runTraceLogs) ? response.runTraceLogs : [],
       debug: response.debug || {
         enabled: false
@@ -1380,6 +1405,15 @@ refreshRunTraceLogBtn.addEventListener("click", async () => {
     setResult("실행 추적 새로고침 완료");
   } catch (error) {
     await handleUiError(error, "popup:refreshRunTraceLogs");
+  }
+});
+
+toggleRunTraceBtn.addEventListener("click", async () => {
+  try {
+    await setRunTraceState(!currentData.runTrace?.enabled);
+    setResult(`실행 추적 ${currentData.runTrace?.enabled ? "활성화" : "비활성화"}됨`);
+  } catch (error) {
+    await handleUiError(error, "popup:setRunTraceState");
   }
 });
 

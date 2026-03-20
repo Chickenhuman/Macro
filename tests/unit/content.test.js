@@ -437,3 +437,60 @@ test("RUN_SINGLE_STEP renders the run overlay by default", async () => {
   assert.equal(response.ok, true);
   assert.equal(harness.document.__appendedToDocumentElement.length, 1);
 });
+
+test("RUN_SINGLE_STEP skips run trace messages when runTraceEnabled is false", async () => {
+  const traceMessages = [];
+  const harness = loadContentHarness({
+    sendMessageImpl: async (message) => {
+      if (message?.type === "APPEND_RUN_TRACE_LOG") {
+        traceMessages.push(message);
+      }
+
+      return {
+        ok: true
+      };
+    }
+  });
+
+  const response = await dispatchContentRuntimeMessage(harness.runtimeListener.fn, {
+    type: "RUN_SINGLE_STEP",
+    step: {
+      type: "wait",
+      ms: 1
+    },
+    index: 0,
+    runTraceEnabled: false
+  });
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(traceMessages, []);
+});
+
+test("RUN_SINGLE_STEP sends run trace messages when runTraceEnabled is true", async () => {
+  const traceMessages = [];
+  const harness = loadContentHarness({
+    sendMessageImpl: async (message) => {
+      if (message?.type === "APPEND_RUN_TRACE_LOG") {
+        traceMessages.push(message);
+      }
+
+      return {
+        ok: true
+      };
+    }
+  });
+
+  const response = await dispatchContentRuntimeMessage(harness.runtimeListener.fn, {
+    type: "RUN_SINGLE_STEP",
+    step: {
+      type: "wait",
+      ms: 1
+    },
+    index: 0
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(traceMessages.length, 2);
+  assert.equal(traceMessages[0].entry?.eventType, "step-start");
+  assert.equal(traceMessages[1].entry?.eventType, "step-success");
+});

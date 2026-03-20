@@ -283,6 +283,99 @@ test("APPEND_STEPS carries over recorded wait gaps across frame transitions with
   assert.equal(harness.storage.macroRecordingState.lastRecordedAt, 1700);
 });
 
+test("APPEND_STEPS does not prepend a recorded wait before waitForPopup steps", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  harness.storage.macroRecordingState = {
+    enabled: true,
+    initializing: false,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    startedAt: 100,
+    lastRecordedAt: 1000,
+    trackedTabIds: [1],
+    pendingPopupTabIds: [],
+    knownTabIdsAtStart: [1],
+    popupStepRecordedTabIds: []
+  };
+
+  const response = await dispatchRuntimeMessage(listener, {
+    type: "APPEND_STEPS",
+    recordedAt: 1700,
+    steps: [
+      {
+        type: "waitForPopup",
+        urlIncludes: "docCommonDraftView.do",
+        timeout: 10000
+      }
+    ]
+  });
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(normalize(harness.storage.macroSteps), [
+    {
+      type: "waitForPopup",
+      urlIncludes: "docCommonDraftView.do",
+      timeout: 10000
+    }
+  ]);
+  assert.equal(harness.storage.macroRecordingState.lastRecordedAt, 1700);
+});
+
+test("handleRecordingRelatedTab records popup waits without inserting a gap before the waitForPopup step", async () => {
+  const harness = loadBackgroundHarness();
+
+  harness.storage.macroSteps = [
+    {
+      type: "click",
+      selector: "#btnConfirmD",
+      label: "확인"
+    }
+  ];
+  harness.storage.macroRecordingState = {
+    enabled: true,
+    initializing: false,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    startedAt: 100,
+    lastRecordedAt: Date.now(),
+    trackedTabIds: [1],
+    pendingPopupTabIds: [],
+    knownTabIdsAtStart: [1],
+    popupStepRecordedTabIds: []
+  };
+
+  harness.context.startRecordingOnTab = async () => {};
+
+  await harness.context.handleRecordingRelatedTab(2, {
+    id: 2,
+    openerTabId: 1,
+    url: "https://example.com/ea/edoc/eapproval/docCommonDraftView.do?multiViewYN=Y",
+    windowId: 11,
+    status: "complete"
+  });
+
+  assert.deepEqual(normalize(harness.storage.macroSteps), [
+    {
+      type: "click",
+      selector: "#btnConfirmD",
+      label: "확인"
+    },
+    {
+      type: "waitForPopup",
+      urlIncludes: "docCommonDraftView.do",
+      timeout: 10000
+    }
+  ]);
+  assert.deepEqual(normalize(harness.storage.macroRecordingState.trackedTabIds), [1, 2]);
+  assert.deepEqual(normalize(harness.storage.macroRecordingState.popupStepRecordedTabIds), [2]);
+});
+
 test("advances an in-flight click step when the popup tab closes before the content response returns", async () => {
   const harness = loadBackgroundHarness();
   const onRemoved = harness.registries.tabsOnRemoved.listeners[0];

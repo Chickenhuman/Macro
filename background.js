@@ -733,9 +733,15 @@ async function appendSteps(newSteps, options = {}) {
       : 0;
 
   const hasRecordedAction = sanitized.some((step) => step.type !== "wait");
-  const startsWithWait = sanitized[0]?.type === "wait";
+  const startsWithImmediateTimingStep =
+    sanitized[0]?.type === "wait" || sanitized[0]?.type === "waitForPopup";
 
-  if (recording.enabled && previousRecordedAt > 0 && hasRecordedAction && !startsWithWait) {
+  if (
+    recording.enabled &&
+    previousRecordedAt > 0 &&
+    hasRecordedAction &&
+    !startsWithImmediateTimingStep
+  ) {
     const gap = roundRecordedDelay(recordedAt - previousRecordedAt);
     if (gap > 0) {
       nextSteps.push({

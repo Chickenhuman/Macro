@@ -59,6 +59,7 @@ let continueMacroRunInFlight = false;
 let continueMacroRunQueued = false;
 let continueMacroRunQueuedState = undefined;
 let continueMacroRunQueuedStateSet = false;
+let appendStepsInFlight = Promise.resolve();
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -768,54 +769,59 @@ function applyRecordedStepContext(steps, recording, options = {}) {
 }
 
 async function appendSteps(newSteps, options = {}) {
-  let sanitized = (newSteps || []).map(sanitizeStep).filter(Boolean);
-  if (!sanitized.length) {
-    return await getSteps();
-  }
+  const run = appendStepsInFlight.catch(() => {}).then(async () => {
+    let sanitized = (newSteps || []).map(sanitizeStep).filter(Boolean);
+    if (!sanitized.length) {
+      return await getSteps();
+    }
 
-  const [currentSteps, recording] = await Promise.all([getSteps(), getRecordingState()]);
-  sanitized = applyRecordedStepContext(sanitized, recording, options);
-  const nextSteps = [...currentSteps];
-  const recordedAt =
-    typeof options.recordedAt === "number" && Number.isFinite(options.recordedAt)
-      ? options.recordedAt
-      : Date.now();
-  const previousRecordedAt =
-    typeof recording.lastRecordedAt === "number" && Number.isFinite(recording.lastRecordedAt)
-      ? recording.lastRecordedAt
-      : 0;
+    const [currentSteps, recording] = await Promise.all([getSteps(), getRecordingState()]);
+    sanitized = applyRecordedStepContext(sanitized, recording, options);
+    const nextSteps = [...currentSteps];
+    const recordedAt =
+      typeof options.recordedAt === "number" && Number.isFinite(options.recordedAt)
+        ? options.recordedAt
+        : Date.now();
+    const previousRecordedAt =
+      typeof recording.lastRecordedAt === "number" && Number.isFinite(recording.lastRecordedAt)
+        ? recording.lastRecordedAt
+        : 0;
 
-  const hasRecordedAction = sanitized.some((step) => step.type !== "wait");
-  const startsWithImmediateTimingStep =
-    sanitized[0]?.type === "wait" || sanitized[0]?.type === "waitForPopup";
+    const hasRecordedAction = sanitized.some((step) => step.type !== "wait");
+    const startsWithImmediateTimingStep =
+      sanitized[0]?.type === "wait" || sanitized[0]?.type === "waitForPopup";
 
-  if (
-    recording.enabled &&
-    previousRecordedAt > 0 &&
-    hasRecordedAction &&
-    !startsWithImmediateTimingStep
-  ) {
-    const gap = roundRecordedDelay(recordedAt - previousRecordedAt);
-    if (gap > 0) {
-      nextSteps.push({
-        type: "wait",
-        ms: gap
+    if (
+      recording.enabled &&
+      previousRecordedAt > 0 &&
+      hasRecordedAction &&
+      !startsWithImmediateTimingStep
+    ) {
+      const gap = roundRecordedDelay(recordedAt - previousRecordedAt);
+      if (gap > 0) {
+        nextSteps.push({
+          type: "wait",
+          ms: gap
+        });
+      }
+    }
+
+    nextSteps.push(...sanitized);
+
+    await setSteps(nextSteps);
+
+    if (recording.enabled && hasRecordedAction) {
+      await setRecordingState({
+        ...recording,
+        lastRecordedAt: recordedAt
       });
     }
-  }
 
-  nextSteps.push(...sanitized);
+    return nextSteps;
+  });
 
-  await setSteps(nextSteps);
-
-  if (recording.enabled && hasRecordedAction) {
-    await setRecordingState({
-      ...recording,
-      lastRecordedAt: recordedAt
-    });
-  }
-
-  return nextSteps;
+  appendStepsInFlight = run;
+  return await run;
 }
 
 function buildPopupWaitStepFromUrl(url) {

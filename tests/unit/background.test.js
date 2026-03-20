@@ -429,6 +429,89 @@ test("handleRecordingRelatedTab records popup waits without inserting a gap befo
   assert.deepEqual(normalize(harness.storage.macroRecordingState.popupStepRecordedTabIds), [2]);
 });
 
+test("APPEND_STEPS preserves the opener click when a related popup wait is appended concurrently", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  harness.storage.macroRecordingState = {
+    enabled: true,
+    initializing: false,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    startedAt: 100,
+    lastRecordedAt: 1000,
+    trackedTabIds: [1],
+    pendingPopupTabIds: [],
+    knownTabIdsAtStart: [1],
+    popupStepRecordedTabIds: []
+  };
+
+  const originalGetSteps = harness.context.getSteps;
+  const originalSetSteps = harness.context.setSteps;
+
+  harness.context.getSteps = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return await originalGetSteps();
+  };
+
+  harness.context.setSteps = async (steps) => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return await originalSetSteps(steps);
+  };
+
+  harness.context.startRecordingOnTab = async () => {};
+
+  const appendClickPromise = dispatchRuntimeMessage(
+    listener,
+    {
+      type: "APPEND_STEPS",
+      recordedAt: 1700,
+      steps: [
+        {
+          type: "click",
+          selector: "#approvalLineBtn",
+          label: "결재라인지정"
+        }
+      ]
+    },
+    {
+      tab: {
+        id: 1,
+        url: "https://example.com/ea/edoc/eapproval/docCommonDraftView.do?diKeyCode=304870"
+      }
+    }
+  );
+
+  const popupAttachPromise = harness.context.handleRecordingRelatedTab(2, {
+    id: 2,
+    openerTabId: 1,
+    windowId: 11,
+    url: "https://example.com/ea/edoc/eapproval/workflow/approvalLineWrite.do"
+  });
+
+  const [appendResponse] = await Promise.all([appendClickPromise, popupAttachPromise]);
+
+  assert.equal(appendResponse.ok, true);
+  assert.deepEqual(normalize(harness.storage.macroSteps), [
+    {
+      type: "wait",
+      ms: 700
+    },
+    {
+      type: "click",
+      selector: "#approvalLineBtn",
+      label: "결재라인지정"
+    },
+    {
+      type: "waitForPopup",
+      urlIncludes: "approvalLineWrite.do",
+      timeout: 10000
+    }
+  ]);
+});
+
 test("advances an in-flight click step when the popup tab closes before the content response returns", async () => {
   const harness = loadBackgroundHarness();
   const onRemoved = harness.registries.tabsOnRemoved.listeners[0];

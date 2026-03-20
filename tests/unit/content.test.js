@@ -302,3 +302,74 @@ test("querySelectorDeep finds same-origin iframe descendants from the top frame"
   assert.equal(deepMatches.length, 1);
   assert.equal(deepMatches[0], childTarget);
 });
+
+test("querySelectorDeep prefers iframe descendants over same-selector hidden inputs in the top frame", () => {
+  const harness = loadContentHarness();
+
+  const hiddenTopInput = {
+    nodeType: 1,
+    tagName: "INPUT",
+    ownerDocument: null,
+    getAttribute(name) {
+      return name === "type" ? "hidden" : "";
+    }
+  };
+
+  const childTarget = {
+    nodeType: 1,
+    tagName: "INPUT",
+    ownerDocument: null,
+    getAttribute(name) {
+      return name === "type" ? "password" : "";
+    }
+  };
+
+  const childDocument = {
+    activeElement: null,
+    defaultView: null,
+    querySelector(selector) {
+      return selector === "#userPassword" ? childTarget : null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "iframe, frame") {
+        return [];
+      }
+
+      return [];
+    }
+  };
+  const childWindow = {
+    document: childDocument
+  };
+  childDocument.defaultView = childWindow;
+  childTarget.ownerDocument = childDocument;
+
+  const frameElement = {
+    nodeType: 1,
+    tagName: "IFRAME",
+    contentWindow: childWindow
+  };
+
+  const topDocument = {
+    activeElement: frameElement,
+    defaultView: null,
+    querySelector(selector) {
+      return selector === "#userPassword" ? hiddenTopInput : null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "iframe, frame") {
+        return [frameElement];
+      }
+
+      return [];
+    }
+  };
+  const topWindow = {
+    document: topDocument
+  };
+  topDocument.defaultView = topWindow;
+  hiddenTopInput.ownerDocument = topDocument;
+  frameElement.ownerDocument = topDocument;
+
+  assert.equal(harness.hooks.querySelectorDeep("#userPassword", topWindow), childTarget);
+});

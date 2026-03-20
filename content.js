@@ -911,6 +911,14 @@
     return getElementDocument(value)?.defaultView || window;
   }
 
+  function isHiddenInputElement(value) {
+    return (
+      isElementNode(value) &&
+      String(value.tagName || "").toLowerCase() === "input" &&
+      String(value.getAttribute?.("type") || "").toLowerCase() === "hidden"
+    );
+  }
+
   function createUiEvent(target, type, init = {}) {
     const eventWindow = getElementWindow(target);
     const EventCtor = eventWindow?.Event || Event;
@@ -941,7 +949,7 @@
     }
 
     const directMatch = currentDocument.querySelector(selector);
-    if (directMatch) {
+    if (directMatch && !isHiddenInputElement(directMatch)) {
       return directMatch;
     }
 
@@ -975,7 +983,7 @@
       }
     }
 
-    return null;
+    return directMatch || null;
   }
 
   function collectQuerySelectorAllDeep(selector, rootWindow = window, depth = 0, results = [], visited = new Set()) {

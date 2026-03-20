@@ -68,6 +68,7 @@ async function startFixtureServer() {
           "Iframe Password Root",
           `
             <button id="openPasswordDialog" type="button">결재</button>
+            <input id="signPassword" type="hidden" value="" />
             <div id="dialogHost"></div>
           `,
           `

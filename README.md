@@ -187,6 +187,7 @@ popup.js
 - 같은 탭이 새 창 대신 새로고침/재이동으로 이어지는 흐름이면 그 현재 탭 완료도 `waitForPopup`로 이어서 처리합니다
 - 실행 시 top frame에서 selector가 안 잡혀도 활성 iframe/하위 iframe 힌트를 따라 같은 탭 내부 frame으로 내려가 다시 찾습니다
 - 같은 origin iframe이면 frame id 해석이 늦더라도 상위 content script가 iframe DOM 안까지 다시 탐색해 selector 실행을 이어갑니다
+- top 문서의 hidden input와 iframe 내부 실제 입력칸이 같은 selector를 공유하면, 실행 시 hidden보다 iframe 내부 실입력을 우선합니다
 - popup 안 버튼이 부모창 새로고침/닫힘을 유발해도 가능한 한 부모 탭으로 복귀해 다음 step을 이어갑니다
 - 클릭 직후 팝업 닫힘 또는 탭 새로고침 때문에 메시지 채널이 먼저 닫혀도, 실제 전환이 감지되면 해당 click step은 계속 완료 처리합니다
 - 클릭 다음에 `wait`/`waitFor`가 이어지는 경우, 현재 탭 reload가 감지되면 그 reload 완료 뒤 다음 step으로 넘어가도록 안정화합니다

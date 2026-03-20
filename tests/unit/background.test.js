@@ -160,7 +160,7 @@ function loadBackgroundHarness() {
   };
 }
 
-async function dispatchRuntimeMessage(listener, message) {
+async function dispatchRuntimeMessage(listener, message, sender = {}) {
   return await new Promise((resolve, reject) => {
     let settled = false;
     const timeout = setTimeout(() => {
@@ -169,7 +169,7 @@ async function dispatchRuntimeMessage(listener, message) {
       }
     }, 100);
 
-    listener(message, {}, (response) => {
+    listener(message, sender, (response) => {
       settled = true;
       clearTimeout(timeout);
       resolve(response);
@@ -323,6 +323,59 @@ test("APPEND_STEPS does not prepend a recorded wait before waitForPopup steps", 
     }
   ]);
   assert.equal(harness.storage.macroRecordingState.lastRecordedAt, 1700);
+});
+
+test("APPEND_STEPS adds popup URL context to steps recorded on tracked related tabs", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  harness.storage.macroRecordingState = {
+    enabled: true,
+    initializing: false,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    startedAt: 100,
+    lastRecordedAt: 0,
+    trackedTabIds: [1, 2],
+    pendingPopupTabIds: [],
+    knownTabIdsAtStart: [1, 2],
+    popupStepRecordedTabIds: []
+  };
+
+  const response = await dispatchRuntimeMessage(
+    listener,
+    {
+      type: "APPEND_STEPS",
+      recordedAt: 1700,
+      steps: [
+        {
+          type: "input",
+          selector: "#userPassword",
+          value: "TestPass!1",
+          label: "비밀번호"
+        }
+      ]
+    },
+    {
+      tab: {
+        id: 2,
+        url: "https://example.com/ea/edoc/eapproval/workflow/approvalSignLump.do?diKeyCode=304563"
+      }
+    }
+  );
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(normalize(harness.storage.macroSteps), [
+    {
+      type: "input",
+      selector: "#userPassword",
+      value: "TestPass!1",
+      label: "비밀번호",
+      urlIncludes: "approvalSignLump.do"
+    }
+  ]);
 });
 
 test("handleRecordingRelatedTab records popup waits without inserting a gap before the waitForPopup step", async () => {
@@ -713,6 +766,72 @@ test("continueMacroRun recovers when a click reloads the current tab before the 
   await harness.context.continueMacroRun(harness.storage.macroRunState);
 
   assert.equal(runSingleStepCalls, 2);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
+test("continueMacroRun switches to a matching related tab for contextual popup steps", async () => {
+  const harness = loadBackgroundHarness();
+  let sentToTabId = null;
+
+  harness.tabs.set(1, {
+    id: 1,
+    url: "https://example.com/gw/bizbox.do",
+    windowId: 10,
+    status: "complete"
+  });
+  harness.tabs.set(2, {
+    id: 2,
+    url: "https://example.com/ea/edoc/eapproval/workflow/approvalSignLump.do?diKeyCode=304563",
+    windowId: 11,
+    status: "complete"
+  });
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "RUN_SINGLE_STEP") {
+      sentToTabId = tabId;
+    }
+
+    return {
+      ok: true,
+      message: "[1] 입력: 비밀번호 완료"
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "input",
+        selector: "#userPassword",
+        value: "TestPass!1",
+        label: "비밀번호",
+        urlIncludes: "approvalSignLump.do"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 중",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(sentToTabId, 2);
   assert.equal(harness.storage.macroRunState.running, false);
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
 });

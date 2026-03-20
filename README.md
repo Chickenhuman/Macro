@@ -182,6 +182,7 @@ popup.js
 ### 팝업 관련
 - 현재 작업 탭에서 새 창이 열리면 자동으로 기록 대상에 붙습니다
 - 실행 시 `waitForPopup`이 있으면 관련 새 창을 기다린 뒤 그 창으로 실행 컨텍스트를 옮깁니다
+- 관련 팝업 탭에서 기록된 일반 step도 URL 힌트를 함께 저장해서, 실행 시 이미 열려 있는 같은 팝업으로 먼저 전환할 수 있습니다
 - 같은 탭이 새 창 대신 새로고침/재이동으로 이어지는 흐름이면 그 현재 탭 완료도 `waitForPopup`로 이어서 처리합니다
 - 실행 시 top frame에서 selector가 안 잡혀도 활성 iframe/하위 iframe 힌트를 따라 같은 탭 내부 frame으로 내려가 다시 찾습니다
 - 같은 origin iframe이면 frame id 해석이 늦더라도 상위 content script가 iframe DOM 안까지 다시 탐색해 selector 실행을 이어갑니다

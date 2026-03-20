@@ -720,13 +720,61 @@ function sanitizeStep(step) {
   return clean;
 }
 
+function getUrlHintFromUrl(url) {
+  const popupStep = buildPopupWaitStepFromUrl(url);
+  return typeof popupStep?.urlIncludes === "string" ? popupStep.urlIncludes.trim() : "";
+}
+
+function applyRecordedStepContext(steps, recording, options = {}) {
+  const sourceTabId = Number(options.sourceTabId);
+  const sourceTabUrl = String(options.sourceTabUrl || "");
+
+  if (!recording?.enabled || !isFiniteTabId(sourceTabId)) {
+    return steps;
+  }
+
+  if (!isFiniteTabId(recording.rootTabId) || sourceTabId === recording.rootTabId) {
+    return steps;
+  }
+
+  const tracked = new Set(recording.trackedTabIds || []);
+  if (!tracked.has(sourceTabId)) {
+    return steps;
+  }
+
+  const urlHint = getUrlHintFromUrl(sourceTabUrl);
+  if (!urlHint) {
+    return steps;
+  }
+
+  return (steps || []).map((step) => {
+    if (!step || typeof step !== "object") {
+      return step;
+    }
+
+    if (step.type === "wait" || step.type === "waitForPopup") {
+      return step;
+    }
+
+    if (typeof step.urlIncludes === "string" && step.urlIncludes.trim()) {
+      return step;
+    }
+
+    return {
+      ...step,
+      urlIncludes: urlHint
+    };
+  });
+}
+
 async function appendSteps(newSteps, options = {}) {
-  const sanitized = (newSteps || []).map(sanitizeStep).filter(Boolean);
+  let sanitized = (newSteps || []).map(sanitizeStep).filter(Boolean);
   if (!sanitized.length) {
     return await getSteps();
   }
 
   const [currentSteps, recording] = await Promise.all([getSteps(), getRecordingState()]);
+  sanitized = applyRecordedStepContext(sanitized, recording, options);
   const nextSteps = [...currentSteps];
   const recordedAt =
     typeof options.recordedAt === "number" && Number.isFinite(options.recordedAt)
@@ -2064,6 +2112,87 @@ async function handleWaitForPopupStep(runState, step) {
   });
 }
 
+function getStepContextUrlHint(step) {
+  if (!step || step.type === "waitForPopup") {
+    return "";
+  }
+
+  return typeof step.urlIncludes === "string" ? step.urlIncludes.trim() : "";
+}
+
+async function alignRunContextToStepTab(runState, step, currentTab) {
+  const expectedUrlHint = getStepContextUrlHint(step);
+  if (!expectedUrlHint) {
+    return {
+      runState,
+      tab: currentTab,
+      switched: false
+    };
+  }
+
+  const currentUrl = String(currentTab?.url || "");
+  const pendingUrl = String(currentTab?.pendingUrl || "");
+  if (currentUrl.includes(expectedUrlHint) || pendingUrl.includes(expectedUrlHint)) {
+    return {
+      runState,
+      tab: currentTab,
+      switched: false
+    };
+  }
+
+  const tabs = await chrome.tabs.query({});
+  const candidate = findBestPopupCandidate(tabs, runState, {
+    urlIncludes: expectedUrlHint
+  });
+
+  if (!candidate) {
+    return {
+      runState,
+      tab: currentTab,
+      switched: false
+    };
+  }
+
+  await ensureContentReady(candidate.id);
+  await setNativeDialogAutoAccept(candidate.id, true);
+
+  const nextTrail = [...(runState.currentTabTrail || [])];
+  if (isFiniteTabId(runState.currentTabId) && runState.currentTabId !== candidate.id) {
+    nextTrail.push(runState.currentTabId);
+  }
+
+  const nextState = await setRunState({
+    ...runState,
+    currentTabId: candidate.id,
+    currentFrameId: 0,
+    currentTabTrail: nextTrail,
+    lastMessage: `step 실행 탭 전환: ${candidate.url || candidate.title || candidate.id}`,
+    error: ""
+  });
+
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "switch-tab-for-step-context",
+    tabId: candidate.id,
+    stepIndex: nextState.stepIndex,
+    stepType: step.type,
+    message: nextState.lastMessage,
+    step,
+    detail: {
+      previousTabId: runState.currentTabId,
+      currentTabTrail: nextState.currentTabTrail || [],
+      urlIncludes: expectedUrlHint,
+      tab: summarizeTabForTrace(candidate)
+    }
+  });
+
+  return {
+    runState: nextState,
+    tab: candidate,
+    switched: true
+  };
+}
+
 async function restartMacroRunIteration(runState) {
   if (!isFiniteTabId(runState.rootTabId)) {
     throw new Error("반복 실행을 시작할 기준 탭을 찾을 수 없습니다.");
@@ -2533,6 +2662,13 @@ async function continueMacroRunInternal(passedState) {
       if (isRestrictedUrl(tab.url || "")) {
         throw new Error("현재 실행 탭은 확장 실행이 허용되지 않는 페이지입니다.");
       }
+
+      const alignedContext = await alignRunContextToStepTab(runState, step, tab);
+      if (alignedContext.switched) {
+        runState = alignedContext.runState;
+        continue;
+      }
+      tab = alignedContext.tab;
 
       await ensureContentReady(runState.currentTabId);
 
@@ -3291,6 +3427,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case "APPEND_STEPS": {
           const steps = Array.isArray(message.steps) ? message.steps : [];
           const nextSteps = await appendSteps(steps, {
+            sourceTabId: sender?.tab?.id,
+            sourceTabUrl: sender?.tab?.url,
             recordedAt:
               typeof message.recordedAt === "number" && Number.isFinite(message.recordedAt)
                 ? message.recordedAt

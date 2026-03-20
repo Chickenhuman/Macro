@@ -81,11 +81,17 @@
   function getHumanLabel(el) {
     if (!el) return "";
 
+    const inputType =
+      typeof el.getAttribute === "function" ? String(el.getAttribute("type") || "").toLowerCase() : "";
+    const inputValue =
+      inputType === "password" ? "" : typeof el.value === "string" ? el.value : "";
+
     const parts = [
       el.getAttribute("aria-label"),
       el.innerText,
       el.textContent,
-      el.value,
+      el.getAttribute("placeholder"),
+      inputValue,
       el.getAttribute("title"),
       el.getAttribute("name"),
       el.id

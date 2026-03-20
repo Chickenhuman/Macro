@@ -48,7 +48,8 @@ const DEFAULT_RUN_STATE = {
   repeatTotal: 1,
   repeatRemaining: 1,
   repeatDelayMs: 0,
-  iteration: 1
+  iteration: 1,
+  restartOnError: false
 };
 
 const DEFAULT_DEBUG_STATE = {
@@ -639,6 +640,7 @@ async function setRunState(state) {
       : 0;
   nextState.iteration =
     Number.isInteger(nextState.iteration) && nextState.iteration > 0 ? nextState.iteration : 1;
+  nextState.restartOnError = !!nextState.restartOnError;
 
   if (!nextState.running) {
     nextState.rootTabId = null;
@@ -663,6 +665,7 @@ async function setRunState(state) {
     nextState.repeatRemaining = 1;
     nextState.repeatDelayMs = 0;
     nextState.iteration = 1;
+    nextState.restartOnError = false;
   }
 
   await chrome.storage.local.set({
@@ -1620,13 +1623,14 @@ async function clearPopupWaitAlarm() {
 
 async function failRun(message) {
   const runState = await getRunState();
+  const errorMessage = String(message || "실행 실패");
   await appendRunTraceLog({
     source: "run:background",
     eventType: "run-failed",
     tabId: runState.currentTabId,
     stepIndex: runState.stepIndex,
     stepType: runState.activeStepType || sanitizeStep(runState.steps?.[runState.stepIndex])?.type || "",
-    message: String(message || "실행 실패"),
+    message: errorMessage,
     step: runState.steps?.[runState.stepIndex] || null,
     detail: {
       currentTabTrail: runState.currentTabTrail || [],
@@ -1636,13 +1640,37 @@ async function failRun(message) {
       knownTabIdsAtWaitStart: runState.knownTabIdsAtWaitStart || []
     }
   });
-  await syncRunDialogAutoAccept(runState, false);
   await clearPopupWaitAlarm();
-  await appendErrorLog(message || "실행 실패", "run");
+  await appendErrorLog(errorMessage, "run");
+
+  if (runState.running && runState.restartOnError && runState.repeatTotal > 1) {
+    try {
+      const nextState = await restartMacroRunAfterError(runState, errorMessage);
+      await continueMacroRun(nextState);
+      return;
+    } catch (restartError) {
+      await appendRunTraceLog({
+        source: "run:background",
+        eventType: "run-error-restart-failed",
+        tabId: runState.currentTabId,
+        stepIndex: runState.stepIndex,
+        stepType: runState.activeStepType || sanitizeStep(runState.steps?.[runState.stepIndex])?.type || "",
+        message: restartError?.message || String(restartError),
+        step: runState.steps?.[runState.stepIndex] || null,
+        detail: {
+          failedMessage: errorMessage,
+          iteration: runState.iteration || 1,
+          repeatTotal: runState.repeatTotal || 1
+        }
+      });
+    }
+  }
+
+  await syncRunDialogAutoAccept(runState, false);
   await setRunState({
     running: false,
-    lastMessage: `오류: ${message}`,
-    error: message || "실행 실패"
+    lastMessage: `오류: ${errorMessage}`,
+    error: errorMessage
   });
 }
 
@@ -2199,12 +2227,12 @@ async function alignRunContextToStepTab(runState, step, currentTab) {
   };
 }
 
-async function restartMacroRunIteration(runState) {
+async function restartMacroRunFromRoot(runState, options = {}) {
   if (!isFiniteTabId(runState.rootTabId)) {
     throw new Error("반복 실행을 시작할 기준 탭을 찾을 수 없습니다.");
   }
 
-  if (runState.repeatDelayMs > 0) {
+  if (options.waitBeforeRestart && runState.repeatDelayMs > 0) {
     await delay(runState.repeatDelayMs);
   }
 
@@ -2216,9 +2244,7 @@ async function restartMacroRunIteration(runState) {
   await ensureContentReady(runState.rootTabId);
   await setNativeDialogAutoAccept(runState.rootTabId, true);
 
-  const nextIteration = (runState.iteration || 1) + 1;
-
-  const nextState = await setRunState({
+  return await setRunState({
     ...runState,
     currentTabId: runState.rootTabId,
     currentFrameId: 0,
@@ -2228,15 +2254,31 @@ async function restartMacroRunIteration(runState) {
     popupUrlIncludes: "",
     popupTimeout: 0,
     popupWaitStartedAt: 0,
-    lastMessage: `반복 실행 ${nextIteration}/${runState.repeatTotal} 시작`,
+    lastMessage: String(options.lastMessage || "반복 실행 재시작"),
     error: "",
     pendingPopupTabIds: [],
     knownTabIdsAtWaitStart: [],
     activeStepIndex: -1,
     activeStepType: "",
     activeStepTabId: null,
+    repeatRemaining:
+      Number.isInteger(options.repeatRemaining) && options.repeatRemaining > 0
+        ? options.repeatRemaining
+        : Math.max(1, runState.repeatRemaining || 1),
+    iteration:
+      Number.isInteger(options.iteration) && options.iteration > 0
+        ? options.iteration
+        : Math.max(1, runState.iteration || 1)
+  });
+}
+
+async function restartMacroRunIteration(runState) {
+  const nextIteration = (runState.iteration || 1) + 1;
+  const nextState = await restartMacroRunFromRoot(runState, {
+    waitBeforeRestart: true,
     repeatRemaining: Math.max(1, runState.repeatRemaining - 1),
-    iteration: nextIteration
+    iteration: nextIteration,
+    lastMessage: `반복 실행 ${nextIteration}/${runState.repeatTotal} 시작`
   });
 
   await appendRunTraceLog({
@@ -2248,6 +2290,31 @@ async function restartMacroRunIteration(runState) {
     detail: {
       iteration: nextIteration,
       repeatTotal: runState.repeatTotal
+    }
+  });
+
+  return nextState;
+}
+
+async function restartMacroRunAfterError(runState, errorMessage) {
+  const iteration = Math.max(1, runState.iteration || 1);
+  const nextState = await restartMacroRunFromRoot(runState, {
+    waitBeforeRestart: false,
+    repeatRemaining: Math.max(1, runState.repeatRemaining || 1),
+    iteration,
+    lastMessage: `오류로 ${iteration}/${runState.repeatTotal}회차를 처음부터 다시 시작합니다.`
+  });
+
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "run-error-restart",
+    tabId: nextState.currentTabId,
+    stepIndex: nextState.stepIndex,
+    message: nextState.lastMessage,
+    detail: {
+      iteration,
+      repeatTotal: runState.repeatTotal,
+      failedMessage: errorMessage
     }
   });
 
@@ -3319,6 +3386,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             typeof message.repeatDelayMs === "number" && message.repeatDelayMs >= 0
               ? message.repeatDelayMs
               : 800;
+          const restartOnError = !!message.restartOnError && repeatCount > 1;
 
           if (currentRun.running) {
             throw new Error("이미 매크로를 실행 중입니다.");
@@ -3362,7 +3430,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             repeatTotal: repeatCount,
             repeatRemaining: repeatCount,
             repeatDelayMs,
-            iteration: 1
+            iteration: 1,
+            restartOnError
           });
 
           await appendRunTraceLog({
@@ -3378,7 +3447,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               rootTab: summarizeTabForTrace(tab),
               stepCount: sanitized.length,
               repeatCount,
-              repeatDelayMs
+              repeatDelayMs,
+              restartOnError
             }
           });
 

@@ -142,6 +142,44 @@
       color: #555;
     }
 
+    .toggle-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      background: #f8fafc;
+    }
+
+    .toggle-row input {
+      width: 16px;
+      height: 16px;
+      margin: 2px 0 0 0;
+      padding: 0;
+      border: none;
+      accent-color: #1a73e8;
+      flex: 0 0 auto;
+    }
+
+    .toggle-row label {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #334155;
+      cursor: pointer;
+      line-height: 1.4;
+    }
+
+    .toggle-row small {
+      font-size: 11px;
+      font-weight: 400;
+      color: #64748b;
+    }
+
     .steps-meta {
       font-size: 12px;
       color: #666;
@@ -398,6 +436,14 @@
         <label for="repeatDelayInput">반복 간격(ms)</label>
         <input id="repeatDelayInput" type="number" min="0" step="100" value="800" />
       </div>
+    </div>
+
+    <div class="toggle-row">
+      <input id="restartOnErrorInput" type="checkbox" />
+      <label for="restartOnErrorInput">
+        반복 실행 중 오류 시 1번부터 재시작
+        <small>실패하면 현재 회차를 중단하지 않고 첫 step부터 다시 시도합니다.</small>
+      </label>
     </div>
 
     <div class="button-grid two">

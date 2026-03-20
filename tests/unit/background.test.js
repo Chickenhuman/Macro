@@ -1247,6 +1247,75 @@ test("continueMacroRun repeats the full macro for the requested repeat count", a
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료 (2회 반복)");
 });
 
+test("continueMacroRun restarts the current repeat iteration from the first step when restartOnError is enabled", async () => {
+  const harness = loadBackgroundHarness();
+  let runSingleStepCalls = 0;
+  const executedStepIndexes = [];
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+      executedStepIndexes.push(message.index);
+
+      if (runSingleStepCalls === 1) {
+        throw new Error("temporary failure");
+      }
+    }
+
+    return {
+      ok: true,
+      message: `[${message.index + 1}] step 완료`
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#runBtn",
+        label: "실행"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null,
+    repeatTotal: 2,
+    repeatRemaining: 2,
+    repeatDelayMs: 0,
+    iteration: 1,
+    restartOnError: true
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(runSingleStepCalls, 3);
+  assert.deepEqual(executedStepIndexes, [0, 0, 0]);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료 (2회 반복)");
+  assert.equal(
+    harness.storage.macroRunTraceLogs.some((entry) => entry.eventType === "run-error-restart"),
+    true
+  );
+  assert.equal(harness.storage.macroErrorLogs.at(-1)?.message, "temporary failure");
+});
+
 test("continueMacroRun keeps selector-based iframe steps on the matching frame", async () => {
   const harness = loadBackgroundHarness();
   const runStepFrames = [];

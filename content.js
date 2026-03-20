@@ -1853,6 +1853,13 @@
     return !!el.isContentEditable;
   }
 
+  function isPasswordEntryTarget(el) {
+    if (!isElementNode(el)) return false;
+    if (el.tagName !== "INPUT") return false;
+
+    return (el.getAttribute("type") || "").toLowerCase() === "password";
+  }
+
   function isKeyboardActionCandidate(el) {
     if (!isElementNode(el)) return false;
     if (isTextEntryTarget(el)) return false;
@@ -2049,6 +2056,19 @@
         if (recorded) {
           return;
         }
+      }
+
+      const inputTarget = getInputTarget(event.target);
+      if (isPasswordEntryTarget(inputTarget)) {
+        const selector = buildSelector(inputTarget);
+        if (!selector) return;
+
+        await recordAction({
+          type: "click",
+          selector,
+          label: getHumanLabel(inputTarget)
+        });
+        return;
       }
 
       const el = getClickableTarget(event.target);

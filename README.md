@@ -149,6 +149,7 @@ popup.js
 - 필드: `selector`, `value`, `label?`, `timeout?`
 - 텍스트 입력에 사용
 - `type="password"` 입력도 같은 방식으로 기록/실행됩니다
+- `type="password"` 칸은 사이트에 따라 먼저 클릭 포커스가 필요할 수 있어서, 클릭 후 값을 바꾸면 `click`과 `input`이 함께 기록될 수 있습니다
 
 #### `select`
 - 필드: `selector`, `value`, `label?`, `timeout?`

@@ -1118,7 +1118,7 @@ test.describe("extension smoke tests", () => {
     expect(steps.some((step) => step.type === "click" && step.selector === "#nextBtn")).toBe(true);
   });
 
-  test("records password field changes as input steps", async () => {
+  test("records password field clicks and changes", async () => {
     const page = await bundle.context.newPage();
     await page.goto(`${server.baseUrl}/password-input.html`);
 
@@ -1131,7 +1131,8 @@ test.describe("extension smoke tests", () => {
     });
     expect(startResponse.ok).toBe(true);
 
-    await page.fill("#passwordInput", "S3cret!");
+    await page.click("#passwordInput");
+    await page.locator("#passwordInput").pressSequentially("S3cret!");
     await page.locator("#passwordInput").blur();
 
     const stopResponse = await sendRuntimeMessage(extensionPage, {
@@ -1142,6 +1143,7 @@ test.describe("extension smoke tests", () => {
     const storage = await readStorage(extensionPage);
     const steps = storage.macroSteps || [];
 
+    expect(steps.some((step) => step.type === "click" && step.selector === "#passwordInput")).toBe(true);
     expect(
       steps.some(
         (step) =>
@@ -1152,7 +1154,7 @@ test.describe("extension smoke tests", () => {
     ).toBe(true);
   });
 
-  test("records password field changes inside a dynamically added iframe", async () => {
+  test("records password field clicks and changes inside a dynamically added iframe", async () => {
     const page = await bundle.context.newPage();
     await page.goto(`${server.baseUrl}/iframe-password-root.html`);
 
@@ -1176,7 +1178,8 @@ test.describe("extension smoke tests", () => {
       })
       .toContain("매크로 기록 중");
     await page.waitForTimeout(650);
-    await frame.locator("#signPassword").fill("TestPass!1");
+    await frame.locator("#signPassword").click();
+    await frame.locator("#signPassword").pressSequentially("TestPass!1");
     await frame.locator("#signPassword").blur();
     await frame.locator("#closeFocus").click();
 
@@ -1214,6 +1217,7 @@ test.describe("extension smoke tests", () => {
     expect(steps.some((step) => step.type === "click" && step.selector === "#openPasswordDialog")).toBe(
       true
     );
+    expect(steps.some((step) => step.type === "click" && step.selector === "#signPassword")).toBe(true);
     expect(
       steps.some(
         (step) =>

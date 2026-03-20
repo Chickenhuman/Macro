@@ -506,6 +506,91 @@ test("continueMacroRun recovers when a click closes the popup before the respons
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
 });
 
+test("continueMacroRun does not duplicate recovery steps when popup close and retry recovery race", async () => {
+  const harness = loadBackgroundHarness();
+  const onRemoved = harness.registries.tabsOnRemoved.listeners[0];
+  const closedMessage =
+    "A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received";
+  const selectors = [];
+
+  harness.tabs.set(2, {
+    id: 2,
+    url: "https://example.com/approvalLineWrite.do",
+    windowId: 11
+  });
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type !== "RUN_SINGLE_STEP") {
+      return {
+        ok: true
+      };
+    }
+
+    selectors.push(`${tabId}:${message.step.selector}`);
+
+    if (message.step.selector === "#set_apprv") {
+      setTimeout(() => {
+        harness.tabs.delete(2);
+        onRemoved(2).catch(() => {});
+      }, 20);
+      throw new Error(closedMessage);
+    }
+
+    if (message.step.selector === "#btnConfirmD") {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 2,
+    currentTabTrail: [1],
+    steps: [
+      {
+        type: "click",
+        selector: "#set_apprv",
+        label: "반영"
+      },
+      {
+        type: "click",
+        selector: "#btnConfirmD",
+        label: "확인"
+      },
+      {
+        type: "click",
+        selector: "#approve",
+        label: "결재"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 중",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.deepEqual(selectors, ["2:#set_apprv", "1:#btnConfirmD", "1:#approve"]);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
 test("restores to the previous tab when the current run tab is already missing", async () => {
   const harness = loadBackgroundHarness();
   let sentToTabId = null;

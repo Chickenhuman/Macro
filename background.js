@@ -55,6 +55,11 @@ const DEFAULT_DEBUG_STATE = {
   enabled: false
 };
 
+let continueMacroRunInFlight = false;
+let continueMacroRunQueued = false;
+let continueMacroRunQueuedState = undefined;
+let continueMacroRunQueuedStateSet = false;
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -2405,6 +2410,37 @@ async function waitForSuccessfulClickNavigation(
 }
 
 async function continueMacroRun(passedState) {
+  if (arguments.length > 0) {
+    continueMacroRunQueuedState = passedState;
+    continueMacroRunQueuedStateSet = true;
+  } else if (!continueMacroRunQueuedStateSet) {
+    continueMacroRunQueuedState = undefined;
+  }
+
+  continueMacroRunQueued = true;
+
+  if (continueMacroRunInFlight) {
+    return;
+  }
+
+  continueMacroRunInFlight = true;
+
+  try {
+    while (continueMacroRunQueued) {
+      const nextState = continueMacroRunQueuedStateSet ? continueMacroRunQueuedState : undefined;
+
+      continueMacroRunQueued = false;
+      continueMacroRunQueuedState = undefined;
+      continueMacroRunQueuedStateSet = false;
+
+      await continueMacroRunInternal(nextState);
+    }
+  } finally {
+    continueMacroRunInFlight = false;
+  }
+}
+
+async function continueMacroRunInternal(passedState) {
   let runState = passedState || (await getRunState());
 
   if (!runState.running || runState.waitingForPopup) {

@@ -39,10 +39,17 @@ function createStorage(initial = {}) {
 }
 
 function createDocumentMock() {
+  const appendedToDocumentElement = [];
+
   const createNode = () => ({
     style: {},
     appendChild() {},
-    remove() {},
+    remove() {
+      const index = appendedToDocumentElement.indexOf(this);
+      if (index >= 0) {
+        appendedToDocumentElement.splice(index, 1);
+      }
+    },
     setAttribute() {},
     querySelector() {
       return null;
@@ -66,7 +73,9 @@ function createDocumentMock() {
   return {
     body: createNode(),
     documentElement: {
-      appendChild() {}
+      appendChild(node) {
+        appendedToDocumentElement.push(node);
+      }
     },
     addEventListener() {},
     createElement: createNode,
@@ -75,7 +84,8 @@ function createDocumentMock() {
     },
     querySelectorAll() {
       return [];
-    }
+    },
+    __appendedToDocumentElement: appendedToDocumentElement
   };
 }
 
@@ -128,6 +138,9 @@ function loadContentHarness({ sendMessageImpl, initialStorage } = {}) {
     HTMLInputElement: class HTMLInputElementMock {},
     HTMLSelectElement: class HTMLSelectElementMock {},
     HTMLTextAreaElement: class HTMLTextAreaElementMock {},
+    location: {
+      href: "https://example.com/test"
+    },
     MouseEvent: class MouseEventMock {},
     setTimeout,
     clearTimeout,
@@ -142,10 +155,28 @@ function loadContentHarness({ sendMessageImpl, initialStorage } = {}) {
 
   return {
     chrome,
+    document,
     hooks,
     runtimeListener,
     storage: storage.state
   };
+}
+
+async function dispatchContentRuntimeMessage(listener, message, sender = {}) {
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        reject(new Error(`No response for message: ${message.type}`));
+      }
+    }, 100);
+
+    listener(message, sender, (response) => {
+      settled = true;
+      clearTimeout(timeout);
+      resolve(response);
+    });
+  });
 }
 
 test("persistRecordedSteps falls back to storage when runtime response channel closes", async () => {
@@ -372,4 +403,37 @@ test("querySelectorDeep prefers iframe descendants over same-selector hidden inp
   frameElement.ownerDocument = topDocument;
 
   assert.equal(harness.hooks.querySelectorDeep("#userPassword", topWindow), childTarget);
+});
+
+test("RUN_SINGLE_STEP does not render the run overlay when hideRunOverlay is enabled", async () => {
+  const harness = loadContentHarness();
+
+  const response = await dispatchContentRuntimeMessage(harness.runtimeListener.fn, {
+    type: "RUN_SINGLE_STEP",
+    step: {
+      type: "wait",
+      ms: 1
+    },
+    index: 0,
+    hideRunOverlay: true
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(harness.document.__appendedToDocumentElement.length, 0);
+});
+
+test("RUN_SINGLE_STEP renders the run overlay by default", async () => {
+  const harness = loadContentHarness();
+
+  const response = await dispatchContentRuntimeMessage(harness.runtimeListener.fn, {
+    type: "RUN_SINGLE_STEP",
+    step: {
+      type: "wait",
+      ms: 1
+    },
+    index: 0
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(harness.document.__appendedToDocumentElement.length, 1);
 });

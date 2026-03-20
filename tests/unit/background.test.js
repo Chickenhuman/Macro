@@ -1316,6 +1316,63 @@ test("continueMacroRun restarts the current repeat iteration from the first step
   assert.equal(harness.storage.macroErrorLogs.at(-1)?.message, "temporary failure");
 });
 
+test("continueMacroRun forwards hideRunOverlay to content when the option is enabled", async () => {
+  const harness = loadBackgroundHarness();
+  const runMessages = [];
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "RUN_SINGLE_STEP") {
+      runMessages.push(message);
+    }
+
+    return {
+      ok: true,
+      message: `[${message.index + 1}] step 완료`
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "wait",
+        ms: 10
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null,
+    repeatTotal: 1,
+    repeatRemaining: 1,
+    repeatDelayMs: 0,
+    iteration: 1,
+    restartOnError: false,
+    hideRunOverlay: true
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(runMessages.length, 1);
+  assert.equal(runMessages[0].hideRunOverlay, true);
+  assert.equal(harness.storage.macroRunState.running, false);
+});
+
 test("continueMacroRun keeps selector-based iframe steps on the matching frame", async () => {
   const harness = loadBackgroundHarness();
   const runStepFrames = [];

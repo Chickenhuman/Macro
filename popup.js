@@ -10,6 +10,7 @@ const addWaitForPopupTemplateBtn = document.getElementById("addWaitForPopupTempl
 const repeatCountInput = document.getElementById("repeatCountInput");
 const repeatDelayInput = document.getElementById("repeatDelayInput");
 const restartOnErrorInput = document.getElementById("restartOnErrorInput");
+const hideRunOverlayInput = document.getElementById("hideRunOverlayInput");
 const macroNameInput = document.getElementById("macroNameInput");
 const saveMacroBtn = document.getElementById("saveMacroBtn");
 const savedMacroSelect = document.getElementById("savedMacroSelect");
@@ -58,7 +59,8 @@ let currentData = {
     steps: [],
     lastMessage: "대기",
     error: "",
-    restartOnError: false
+    restartOnError: false,
+    hideRunOverlay: false
   },
   errorLogs: [],
   runTraceLogs: [],
@@ -280,6 +282,7 @@ function renderControls() {
   repeatCountInput.disabled = !!run.running;
   repeatDelayInput.disabled = !!run.running;
   restartOnErrorInput.disabled = !!run.running;
+  hideRunOverlayInput.disabled = !!run.running;
 }
 
 async function writeErrorLogEntry(message, source = "popup") {
@@ -501,13 +504,14 @@ function renderStatus() {
     run.repeatTotal > 1 ? ` ${run.iteration || 1}/${run.repeatTotal}회차` : "";
   const restartText =
     run.restartOnError && run.repeatTotal > 1 ? " · 오류 시 처음부터 재시작" : "";
+  const hideOverlayText = run.hideRunOverlay ? " · 실행 배지 숨김" : "";
 
   if (run.running) {
     statusBadge.textContent = run.waitingForPopup ? "POP" : "RUN";
     statusBadge.classList.remove("recording");
     statusText.textContent = run.waitingForPopup
-      ? `새 창을 기다리는 중입니다.${repeatText}${restartText} ${run.popupUrlIncludes || ""}`.trim()
-      : `매크로 실행 중입니다.${repeatText}${restartText} ${run.stepIndex}/${(run.steps || []).length}`;
+      ? `새 창을 기다리는 중입니다.${repeatText}${restartText}${hideOverlayText} ${run.popupUrlIncludes || ""}`.trim()
+      : `매크로 실행 중입니다.${repeatText}${restartText}${hideOverlayText} ${run.stepIndex}/${(run.steps || []).length}`;
     renderControls();
     return;
   }
@@ -940,7 +944,8 @@ async function loadData() {
         steps: [],
         lastMessage: "대기",
         error: "",
-        restartOnError: false
+        restartOnError: false,
+        hideRunOverlay: false
       },
       errorLogs: Array.isArray(response.errorLogs) ? response.errorLogs : [],
       runTraceLogs: Array.isArray(response.runTraceLogs) ? response.runTraceLogs : [],
@@ -956,6 +961,7 @@ async function loadData() {
 
     if (currentData.run?.running) {
       restartOnErrorInput.checked = !!currentData.run.restartOnError;
+      hideRunOverlayInput.checked = !!currentData.run.hideRunOverlay;
     }
 
     renderStatus();
@@ -1025,6 +1031,7 @@ async function runMacro() {
   const repeatCount = Number.parseInt(repeatCountInput.value, 10);
   const repeatDelayMs = Number.parseInt(repeatDelayInput.value, 10);
   const restartOnError = !!restartOnErrorInput.checked;
+  const hideRunOverlay = !!hideRunOverlayInput.checked;
 
   if (!Number.isInteger(repeatCount) || repeatCount < 1) {
     throw new Error("반복 횟수는 1 이상의 정수여야 합니다.");
@@ -1040,7 +1047,8 @@ async function runMacro() {
     steps,
     repeatCount,
     repeatDelayMs,
-    restartOnError
+    restartOnError,
+    hideRunOverlay
   });
 
   if (!response?.ok) {

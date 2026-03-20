@@ -49,7 +49,8 @@ const DEFAULT_RUN_STATE = {
   repeatRemaining: 1,
   repeatDelayMs: 0,
   iteration: 1,
-  restartOnError: false
+  restartOnError: false,
+  hideRunOverlay: false
 };
 
 const DEFAULT_DEBUG_STATE = {
@@ -641,6 +642,7 @@ async function setRunState(state) {
   nextState.iteration =
     Number.isInteger(nextState.iteration) && nextState.iteration > 0 ? nextState.iteration : 1;
   nextState.restartOnError = !!nextState.restartOnError;
+  nextState.hideRunOverlay = !!nextState.hideRunOverlay;
 
   if (!nextState.running) {
     nextState.rootTabId = null;
@@ -666,6 +668,7 @@ async function setRunState(state) {
     nextState.repeatDelayMs = 0;
     nextState.iteration = 1;
     nextState.restartOnError = false;
+    nextState.hideRunOverlay = false;
   }
 
   await chrome.storage.local.set({
@@ -2776,7 +2779,8 @@ async function continueMacroRunInternal(passedState) {
       const response = await sendTabMessageToFrame(runState.currentTabId, {
         type: "RUN_SINGLE_STEP",
         step,
-        index: runState.stepIndex
+        index: runState.stepIndex,
+        hideRunOverlay: !!runState.hideRunOverlay
       }, dispatchFrameId);
 
       if (!response?.ok) {
@@ -3387,6 +3391,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               ? message.repeatDelayMs
               : 800;
           const restartOnError = !!message.restartOnError && repeatCount > 1;
+          const hideRunOverlay = !!message.hideRunOverlay;
 
           if (currentRun.running) {
             throw new Error("이미 매크로를 실행 중입니다.");
@@ -3431,7 +3436,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             repeatRemaining: repeatCount,
             repeatDelayMs,
             iteration: 1,
-            restartOnError
+            restartOnError,
+            hideRunOverlay
           });
 
           await appendRunTraceLog({
@@ -3448,7 +3454,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               stepCount: sanitized.length,
               repeatCount,
               repeatDelayMs,
-              restartOnError
+              restartOnError,
+              hideRunOverlay
             }
           });
 

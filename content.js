@@ -2881,13 +2881,17 @@
     }
   }
 
-  async function runSingleStep(step, index = 0) {
+  async function runSingleStep(step, index = 0, options = {}) {
     if (!step || !step.type) {
       throw new Error("step에 type이 없습니다.");
     }
 
     const desc = describeStep(step, index);
-    setOverlay("매크로 실행 중", desc);
+    if (options.hideRunOverlay) {
+      removeOverlay();
+    } else {
+      setOverlay("매크로 실행 중", desc);
+    }
 
     await appendRunTraceLog({
       source: "content:run",
@@ -2978,7 +2982,9 @@
         }
 
         if (message?.type === "RUN_SINGLE_STEP") {
-          const result = await runSingleStep(message.step, message.index || 0);
+          const result = await runSingleStep(message.step, message.index || 0, {
+            hideRunOverlay: !!message.hideRunOverlay
+          });
           sendResponse({
             ok: true,
             message: result

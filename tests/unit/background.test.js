@@ -49,6 +49,7 @@ function createEventRegistry() {
 
 function loadBackgroundHarness() {
   const storage = createStorage();
+  const sessionStorage = createStorage();
   const executeScriptCalls = [];
   const frameIdsByTab = new Map([[1, [0]]]);
   const registries = {
@@ -112,7 +113,8 @@ function loadBackgroundHarness() {
       }
     },
     storage: {
-      local: storage.api
+      local: storage.api,
+      session: sessionStorage.api
     },
     tabs: {
       async get(tabId) {
@@ -154,6 +156,7 @@ function loadBackgroundHarness() {
     context,
     executeScriptCalls,
     registries,
+    sessionStorage: sessionStorage.state,
     storage: storage.state,
     tabs,
     frameIdsByTab
@@ -1097,6 +1100,7 @@ test("GET_DATA backfills legacy key steps without key metadata", async () => {
   const harness = loadBackgroundHarness();
   const listener = harness.registries.runtimeOnMessage.listeners[0];
 
+  harness.sessionStorage.macroWorkspaceSessionInitialized = true;
   harness.storage.macroSteps = [
     {
       type: "key",
@@ -1135,6 +1139,43 @@ test("GET_DATA backfills legacy key steps without key metadata", async () => {
     enabled: false
   });
   assert.deepEqual(normalize(harness.storage.macroSteps), normalize(response.steps));
+});
+
+test("GET_DATA clears the current step workspace on the first popup load of a browser session", async () => {
+  const harness = loadBackgroundHarness();
+  const listener = harness.registries.runtimeOnMessage.listeners[0];
+
+  harness.storage.macroSteps = [
+    {
+      type: "wait",
+      ms: 500
+    }
+  ];
+  harness.storage.savedMacros = [
+    {
+      id: "saved-1",
+      name: "기본 저장",
+      steps: [
+        {
+          type: "wait",
+          ms: 500
+        }
+      ],
+      createdAt: 1000,
+      updatedAt: 1000
+    }
+  ];
+
+  const response = await dispatchRuntimeMessage(listener, {
+    type: "GET_DATA"
+  });
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(normalize(response.steps), []);
+  assert.deepEqual(normalize(harness.storage.macroSteps), []);
+  assert.equal(harness.sessionStorage.macroWorkspaceSessionInitialized, true);
+  assert.equal(response.savedMacros.length, 1);
+  assert.equal(response.savedMacros[0].name, "기본 저장");
 });
 
 test("SET_RUN_TRACE_STATE updates the global run trace mode", async () => {
@@ -1307,7 +1348,7 @@ test("continueMacroRun repeats the full macro for the requested repeat count", a
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료 (2회 반복)");
 });
 
-test("continueMacroRun restarts the current repeat iteration from the first step when restartOnError is enabled", async () => {
+test("continueMacroRun treats a failed iteration as complete and moves to the next repeat when restartOnError is enabled", async () => {
   const harness = loadBackgroundHarness();
   let runSingleStepCalls = 0;
   const executedStepIndexes = [];
@@ -1365,12 +1406,12 @@ test("continueMacroRun restarts the current repeat iteration from the first step
 
   await harness.context.continueMacroRun(harness.storage.macroRunState);
 
-  assert.equal(runSingleStepCalls, 3);
-  assert.deepEqual(executedStepIndexes, [0, 0, 0]);
+  assert.equal(runSingleStepCalls, 2);
+  assert.deepEqual(executedStepIndexes, [0, 0]);
   assert.equal(harness.storage.macroRunState.running, false);
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료 (2회 반복)");
   assert.equal(
-    harness.storage.macroRunTraceLogs.some((entry) => entry.eventType === "run-error-restart"),
+    harness.storage.macroRunTraceLogs.some((entry) => entry.eventType === "run-error-next-iteration"),
     true
   );
   assert.equal(harness.storage.macroErrorLogs.at(-1)?.message, "temporary failure");

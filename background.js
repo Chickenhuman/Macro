@@ -7,6 +7,7 @@ const DEBUG_STATE_KEY = "macroDebugState";
 const DEBUG_LOGS_KEY = "macroDebugLogs";
 const RUN_TRACE_STATE_KEY = "macroRunTraceState";
 const RUN_TRACE_LOGS_KEY = "macroRunTraceLogs";
+const WORKSPACE_SESSION_KEY = "macroWorkspaceSessionInitialized";
 const POPUP_WAIT_ALARM = "macroPopupWaitTimeout";
 
 const DEFAULT_RECORDING_STATE = {
@@ -337,6 +338,27 @@ function createSavedMacroId() {
 async function setSteps(steps) {
   await chrome.storage.local.set({
     [STEPS_KEY]: Array.isArray(steps) ? steps : []
+  });
+}
+
+async function ensureWorkspaceDefaultsForSession() {
+  if (!chrome.storage?.session?.get || !chrome.storage?.session?.set) {
+    return;
+  }
+
+  const session = await chrome.storage.session.get(WORKSPACE_SESSION_KEY);
+  if (session[WORKSPACE_SESSION_KEY]) {
+    return;
+  }
+
+  const [recording, runState] = await Promise.all([getRecordingState(), getRunState()]);
+
+  if (!recording.enabled && !recording.initializing && !runState.running) {
+    await setSteps([]);
+  }
+
+  await chrome.storage.session.set({
+    [WORKSPACE_SESSION_KEY]: true
   });
 }
 
@@ -1690,6 +1712,32 @@ async function clearPopupWaitAlarm() {
 async function failRun(message) {
   const runState = await getRunState();
   const errorMessage = String(message || "실행 실패");
+  await clearPopupWaitAlarm();
+  await appendErrorLog(errorMessage, "run");
+
+  if (runState.running && runState.restartOnError && runState.repeatRemaining > 1) {
+    try {
+      const nextState = await continueMacroRunFromNextIterationAfterError(runState, errorMessage);
+      await continueMacroRun(nextState);
+      return;
+    } catch (advanceError) {
+      await appendRunTraceLog({
+        source: "run:background",
+        eventType: "run-error-next-iteration-failed",
+        tabId: runState.currentTabId,
+        stepIndex: runState.stepIndex,
+        stepType: runState.activeStepType || sanitizeStep(runState.steps?.[runState.stepIndex])?.type || "",
+        message: advanceError?.message || String(advanceError),
+        step: runState.steps?.[runState.stepIndex] || null,
+        detail: {
+          failedMessage: errorMessage,
+          iteration: runState.iteration || 1,
+          repeatTotal: runState.repeatTotal || 1
+        }
+      });
+    }
+  }
+
   await appendRunTraceLog({
     source: "run:background",
     eventType: "run-failed",
@@ -1706,31 +1754,6 @@ async function failRun(message) {
       knownTabIdsAtWaitStart: runState.knownTabIdsAtWaitStart || []
     }
   });
-  await clearPopupWaitAlarm();
-  await appendErrorLog(errorMessage, "run");
-
-  if (runState.running && runState.restartOnError && runState.repeatTotal > 1) {
-    try {
-      const nextState = await restartMacroRunAfterError(runState, errorMessage);
-      await continueMacroRun(nextState);
-      return;
-    } catch (restartError) {
-      await appendRunTraceLog({
-        source: "run:background",
-        eventType: "run-error-restart-failed",
-        tabId: runState.currentTabId,
-        stepIndex: runState.stepIndex,
-        stepType: runState.activeStepType || sanitizeStep(runState.steps?.[runState.stepIndex])?.type || "",
-        message: restartError?.message || String(restartError),
-        step: runState.steps?.[runState.stepIndex] || null,
-        detail: {
-          failedMessage: errorMessage,
-          iteration: runState.iteration || 1,
-          repeatTotal: runState.repeatTotal || 1
-        }
-      });
-    }
-  }
 
   await syncRunDialogAutoAccept(runState, false);
   await setRunState({
@@ -2362,23 +2385,25 @@ async function restartMacroRunIteration(runState) {
   return nextState;
 }
 
-async function restartMacroRunAfterError(runState, errorMessage) {
-  const iteration = Math.max(1, runState.iteration || 1);
+async function continueMacroRunFromNextIterationAfterError(runState, errorMessage) {
+  const failedIteration = Math.max(1, runState.iteration || 1);
+  const nextIteration = failedIteration + 1;
   const nextState = await restartMacroRunFromRoot(runState, {
-    waitBeforeRestart: false,
-    repeatRemaining: Math.max(1, runState.repeatRemaining || 1),
-    iteration,
-    lastMessage: `오류로 ${iteration}/${runState.repeatTotal}회차를 처음부터 다시 시작합니다.`
+    waitBeforeRestart: true,
+    repeatRemaining: Math.max(1, runState.repeatRemaining - 1),
+    iteration: nextIteration,
+    lastMessage: `오류로 ${failedIteration}/${runState.repeatTotal}회차를 종료하고 ${nextIteration}/${runState.repeatTotal}회차로 넘어갑니다.`
   });
 
   await appendRunTraceLog({
     source: "run:background",
-    eventType: "run-error-restart",
+    eventType: "run-error-next-iteration",
     tabId: nextState.currentTabId,
     stepIndex: nextState.stepIndex,
     message: nextState.lastMessage,
     detail: {
-      iteration,
+      failedIteration,
+      nextIteration,
       repeatTotal: runState.repeatTotal,
       failedMessage: errorMessage
     }
@@ -3315,6 +3340,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       switch (message?.type) {
         case "GET_DATA": {
+          await ensureWorkspaceDefaultsForSession();
           const [steps, savedMacros, recording, runState, errorLogs, debug, runTrace, debugLogs, runTraceLogs] =
             await Promise.all([
             getSteps(),

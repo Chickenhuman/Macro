@@ -2219,6 +2219,60 @@ test.describe("extension smoke tests", () => {
       ]);
   });
 
+  test("opens with an empty workspace and requires explicit saved macro loading in a new browser session", async () => {
+    const savedMacro = {
+      id: "saved-1",
+      name: "기본 저장",
+      steps: [
+        {
+          type: "wait",
+          ms: 500
+        }
+      ],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+
+    await extensionPage.evaluate(async (macro) => {
+      await chrome.storage.local.set({
+        macroSteps: [
+          {
+            type: "wait",
+            ms: 500
+          }
+        ],
+        savedMacros: [macro]
+      });
+      await chrome.storage.session.clear();
+    }, savedMacro);
+
+    await extensionPage.reload();
+    await extensionPage.waitForLoadState("domcontentloaded");
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return (storage.macroSteps || []).length;
+      })
+      .toBe(0);
+
+    await expect(extensionPage.locator(".section-title").first()).toHaveText("저장 매크로");
+    await expect(extensionPage.locator("#savedMacroSelect")).toHaveValue("");
+    await expect(extensionPage.locator("#loadMacroBtn")).toBeDisabled();
+
+    await extensionPage.selectOption("#savedMacroSelect", "saved-1");
+    await expect(extensionPage.locator("#loadMacroBtn")).toBeEnabled();
+
+    await extensionPage.click("#loadMacroBtn");
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return storage.macroSteps?.[0]?.ms || 0;
+      })
+      .toBe(500);
+  });
+
   test("reorders steps by dragging in the popup UI", async () => {
     const steps = [
       {

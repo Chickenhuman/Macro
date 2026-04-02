@@ -240,11 +240,12 @@ function renderSavedMacros() {
 
   savedMacroSelect.innerHTML = "";
 
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = savedMacros.length ? "불러올 매크로 선택" : "저장된 매크로 없음";
+  savedMacroSelect.appendChild(placeholder);
+
   if (!savedMacros.length) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "저장된 매크로 없음";
-    savedMacroSelect.appendChild(option);
     savedMacroSelect.disabled = true;
     savedMacroMeta.textContent = "0개 저장됨";
     renderControls();
@@ -261,12 +262,12 @@ function renderSavedMacros() {
   savedMacroSelect.disabled = false;
 
   const hasPrevious = savedMacros.some((macro) => macro.id === previousValue);
-  savedMacroSelect.value = hasPrevious ? previousValue : savedMacros[0].id;
+  savedMacroSelect.value = hasPrevious ? previousValue : "";
 
   const selected = getSelectedSavedMacro();
   savedMacroMeta.textContent = selected
     ? `${savedMacros.length}개 저장됨 · 최근 수정 ${formatSavedMacroTimestamp(selected.updatedAt)}`
-    : `${savedMacros.length}개 저장됨`;
+    : `${savedMacros.length}개 저장됨 · 최근 수정 ${formatSavedMacroTimestamp(savedMacros[0]?.updatedAt)}`;
   renderControls();
 }
 
@@ -525,7 +526,7 @@ function renderStatus() {
   const repeatText =
     run.repeatTotal > 1 ? ` ${run.iteration || 1}/${run.repeatTotal}회차` : "";
   const restartText =
-    run.restartOnError && run.repeatTotal > 1 ? " · 오류 시 처음부터 재시작" : "";
+    run.restartOnError && run.repeatTotal > 1 ? " · 오류 시 다음 회차 계속" : "";
   const hideOverlayText = run.hideRunOverlay ? " · 실행 배지 숨김" : "";
 
   if (run.running) {
@@ -1137,6 +1138,7 @@ async function saveCurrentMacro() {
   await loadData();
   if (response.savedMacro?.id) {
     savedMacroSelect.value = response.savedMacro.id;
+    renderSavedMacros();
   }
   setResult(`매크로 저장 완료: ${name}`);
 }

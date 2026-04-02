@@ -411,6 +411,27 @@
   </div>
 
   <div class="panel">
+    <div class="section-title">저장 매크로</div>
+    <div class="field-stack">
+      <label for="savedMacroSelect">저장 목록</label>
+      <select id="savedMacroSelect"></select>
+    </div>
+    <div class="button-grid two">
+      <button id="loadMacroBtn">선택 매크로 불러오기</button>
+      <button id="deleteMacroBtn" class="danger">선택 매크로 삭제</button>
+    </div>
+    <div id="savedMacroMeta" class="footer-note">0개 저장됨</div>
+    <div class="field-stack" style="margin-top:12px;">
+      <label for="macroNameInput">매크로 이름</label>
+      <input id="macroNameInput" type="text" placeholder="예: 편철접수 기본 흐름" />
+    </div>
+    <div class="button-grid two">
+      <button id="saveMacroBtn">현재 매크로 저장</button>
+      <button disabled>같은 이름 저장 시 덮어쓰기</button>
+    </div>
+  </div>
+
+  <div class="panel">
     <div class="status-row">
       <div id="statusBadge" class="badge">대기</div>
       <div id="statusText" class="status-text">기록 중이 아니며 실행도 진행 중이 아닙니다.</div>
@@ -441,8 +462,8 @@
     <div class="toggle-row">
       <input id="restartOnErrorInput" type="checkbox" />
       <label for="restartOnErrorInput">
-        반복 실행 중 오류 시 1번부터 재시작
-        <small>실패하면 현재 회차를 중단하지 않고 첫 step부터 다시 시도합니다.</small>
+        반복 실행 중 오류 시 다음 회차로 넘어가기
+        <small>실패하면 현재 회차를 종료 처리하고 남은 회차를 계속 실행합니다.</small>
       </label>
     </div>
 
@@ -462,27 +483,6 @@
     <div class="footer-note">
       기록을 시작하면 팝업은 닫혀도 됩니다. 페이지와 관련 새 창에서 작업을 기록한 뒤 확장을 다시 열어 종료하면 됩니다.
     </div>
-  </div>
-
-  <div class="panel">
-    <div class="section-title">저장 매크로</div>
-    <div class="field-stack">
-      <label for="macroNameInput">매크로 이름</label>
-      <input id="macroNameInput" type="text" placeholder="예: 편철접수 기본 흐름" />
-    </div>
-    <div class="button-grid two">
-      <button id="saveMacroBtn">현재 매크로 저장</button>
-      <button id="loadMacroBtn">선택 매크로 불러오기</button>
-    </div>
-    <div class="field-stack" style="margin-top:8px;">
-      <label for="savedMacroSelect">저장 목록</label>
-      <select id="savedMacroSelect"></select>
-    </div>
-    <div class="button-grid two">
-      <button id="deleteMacroBtn" class="danger">선택 매크로 삭제</button>
-      <button disabled>같은 이름 저장 시 덮어쓰기</button>
-    </div>
-    <div id="savedMacroMeta" class="footer-note">0개 저장됨</div>
   </div>
 
   <div class="panel">

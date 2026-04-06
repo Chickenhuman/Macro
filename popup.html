@@ -33,8 +33,42 @@
       background: #fff;
       border: 1px solid #e4e4e4;
       border-radius: 12px;
-      padding: 12px;
       margin-bottom: 12px;
+    }
+
+    .panel-section {
+      overflow: hidden;
+    }
+
+    .panel-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px;
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .panel-summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .panel-summary::after {
+      content: "▾";
+      font-size: 14px;
+      color: #64748b;
+      transform: rotate(-90deg);
+      transition: transform 0.15s ease;
+      flex: 0 0 auto;
+    }
+
+    .panel-section[open] > .panel-summary::after {
+      transform: rotate(0deg);
+    }
+
+    .panel-body {
+      padding: 0 12px 12px;
     }
 
     .status-row {
@@ -120,7 +154,7 @@
     .section-title {
       font-size: 13px;
       font-weight: 700;
-      margin-bottom: 8px;
+      margin: 0;
     }
 
     .field-grid {
@@ -304,17 +338,6 @@
       flex: 1;
     }
 
-    details {
-      margin-top: 4px;
-    }
-
-    summary {
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 700;
-      margin-bottom: 8px;
-    }
-
     textarea {
       width: 100%;
       min-height: 220px;
@@ -410,117 +433,144 @@
     현재 탭에서 새 창이 열리면 그 창도 자동 기록/실행 대상으로 연결됩니다.
   </div>
 
-  <div class="panel">
-    <div class="section-title">저장 매크로</div>
-    <div class="field-stack">
-      <label for="savedMacroSelect">저장 목록</label>
-      <select id="savedMacroSelect"></select>
-    </div>
-    <div class="button-grid two">
-      <button id="loadMacroBtn">선택 매크로 불러오기</button>
-      <button id="deleteMacroBtn" class="danger">선택 매크로 삭제</button>
-    </div>
-    <div id="savedMacroMeta" class="footer-note">0개 저장됨</div>
-    <div class="field-stack" style="margin-top:12px;">
-      <label for="macroNameInput">매크로 이름</label>
-      <input id="macroNameInput" type="text" placeholder="예: 편철접수 기본 흐름" />
-    </div>
-    <div class="button-grid two">
-      <button id="saveMacroBtn">현재 매크로 저장</button>
-      <button disabled>같은 이름 저장 시 덮어쓰기</button>
-    </div>
-  </div>
-
-  <div class="panel">
-    <div class="status-row">
-      <div id="statusBadge" class="badge">대기</div>
-      <div id="statusText" class="status-text">기록 중이 아니며 실행도 진행 중이 아닙니다.</div>
-    </div>
-
-    <div class="button-grid">
-      <button id="startRecordBtn" class="primary">기록 시작</button>
-      <button id="stopRecordBtn">기록 종료</button>
-      <button id="runBtn">지금 실행</button>
-    </div>
-
-    <div class="button-grid two">
-      <button id="clearBtn" class="danger">기록 전체 삭제</button>
-      <button id="refreshBtn">새로고침</button>
-    </div>
-
-    <div class="field-grid">
+  <details class="panel panel-section" data-panel-key="savedMacros" open>
+    <summary class="panel-summary">
+      <span class="section-title">저장 매크로</span>
+    </summary>
+    <div class="panel-body">
       <div class="field-stack">
-        <label for="repeatCountInput">반복 횟수</label>
-        <input id="repeatCountInput" type="number" min="1" step="1" value="1" />
+        <label for="savedMacroSelect">저장 목록</label>
+        <select id="savedMacroSelect"></select>
       </div>
-      <div class="field-stack">
-        <label for="repeatDelayInput">반복 간격(ms)</label>
-        <input id="repeatDelayInput" type="number" min="0" step="100" value="800" />
+      <div class="button-grid two">
+        <button id="loadMacroBtn">선택 매크로 불러오기</button>
+        <button id="deleteMacroBtn" class="danger">선택 매크로 삭제</button>
+      </div>
+      <div id="savedMacroMeta" class="footer-note">0개 저장됨</div>
+      <div class="field-stack" style="margin-top:12px;">
+        <label for="macroNameInput">매크로 이름</label>
+        <input id="macroNameInput" type="text" placeholder="예: 편철접수 기본 흐름" />
+      </div>
+      <div class="button-grid two">
+        <button id="saveMacroBtn">현재 매크로 저장</button>
+        <button disabled>같은 이름 저장 시 덮어쓰기</button>
       </div>
     </div>
+  </details>
 
-    <div class="toggle-row">
-      <input id="restartOnErrorInput" type="checkbox" />
-      <label for="restartOnErrorInput">
-        반복 실행 중 오류 시 다음 회차로 넘어가기
-        <small>실패하면 현재 회차를 종료 처리하고 남은 회차를 계속 실행합니다.</small>
-      </label>
-    </div>
+  <details class="panel panel-section" data-panel-key="controls" open>
+    <summary class="panel-summary">
+      <span class="section-title">실행 / 기록 제어</span>
+    </summary>
+    <div class="panel-body">
+      <div class="status-row">
+        <div id="statusBadge" class="badge">대기</div>
+        <div id="statusText" class="status-text">기록 중이 아니며 실행도 진행 중이 아닙니다.</div>
+      </div>
 
-    <div class="toggle-row">
-      <input id="hideRunOverlayInput" type="checkbox" />
-      <label for="hideRunOverlayInput">
-        매크로 실행중 숨기기
-        <small>페이지 우상단의 `매크로 실행 중` 진행 배지를 표시하지 않습니다.</small>
-      </label>
-    </div>
+      <div class="button-grid">
+        <button id="startRecordBtn" class="primary">기록 시작</button>
+        <button id="stopRecordBtn">기록 종료</button>
+        <button id="runBtn">지금 실행</button>
+      </div>
 
-    <div class="button-grid two">
-      <button id="undoLastStepBtn">직전 기록 되돌리기</button>
-      <button id="stopRunBtn">실행 중지</button>
-    </div>
+      <div class="button-grid two">
+        <button id="clearBtn" class="danger">기록 전체 삭제</button>
+        <button id="refreshBtn">새로고침</button>
+      </div>
 
-    <div class="footer-note">
-      기록을 시작하면 팝업은 닫혀도 됩니다. 페이지와 관련 새 창에서 작업을 기록한 뒤 확장을 다시 열어 종료하면 됩니다.
-    </div>
-  </div>
+      <div class="field-grid">
+        <div class="field-stack">
+          <label for="repeatCountInput">반복 횟수</label>
+          <input id="repeatCountInput" type="number" min="1" step="1" value="1" />
+        </div>
+        <div class="field-stack">
+          <label for="repeatDelayInput">반복 간격(ms)</label>
+          <input id="repeatDelayInput" type="number" min="0" step="100" value="800" />
+        </div>
+      </div>
 
-  <div class="panel">
-    <div class="section-title">빠른 추가</div>
-    <div class="button-grid">
-      <button data-wait="500">대기 0.5초</button>
-      <button data-wait="1000">대기 1초</button>
-      <button data-wait="2000">대기 2초</button>
-    </div>
-    <div class="button-grid two" style="margin-top:8px;">
-      <button data-wait="5000">대기 5초</button>
-      <button id="addWaitForTemplateBtn">waitFor 예시 추가</button>
-    </div>
-    <div class="button-grid two" style="margin-top:8px;">
-      <button id="addWaitForPopupTemplateBtn">waitForPopup 예시 추가</button>
-      <button disabled>새 창 자동감지 사용</button>
-    </div>
-  </div>
+      <div class="toggle-row">
+        <input id="allowSingleApprovalInput" type="checkbox" />
+        <label for="allowSingleApprovalInput">
+          전결문서
+          <small>허용된 전결 문서일 때만 체크하세요. 미체크 상태에서 마감부서 줄에 `전결`이 감지되면 즉시 중단합니다.</small>
+        </label>
+      </div>
 
-  <div class="panel">
-    <div class="section-title">기록된 step</div>
-    <div id="stepsMeta" class="steps-meta">0개</div>
-    <div id="emptyBox" class="empty">
-      아직 기록된 step이 없습니다.<br>
-      보통은 아래 순서로 사용하면 됩니다.<br><br>
-      1) 기록 전체 삭제<br>
-      2) 기록 시작<br>
-      3) 페이지에서 버튼 클릭 / 입력 / 선택<br>
-      4) 새 창이 뜨면 그 창에서도 계속 작업<br>
-      5) 기록 종료<br>
-      6) 지금 실행
-    </div>
-    <div id="stepsList" class="steps-list" style="display:none;"></div>
-  </div>
+      <div class="toggle-row">
+        <input id="restartOnErrorInput" type="checkbox" />
+        <label for="restartOnErrorInput">
+          반복 실행 중 오류 시 다음 회차로 넘어가기
+          <small>실패하면 현재 회차를 종료 처리하고 남은 회차를 계속 실행합니다.</small>
+        </label>
+      </div>
 
-  <div class="panel">
-    <details>
-      <summary>고급 편집(JSON)</summary>
+      <div class="toggle-row">
+        <input id="hideRunOverlayInput" type="checkbox" />
+        <label for="hideRunOverlayInput">
+          매크로 실행중 숨기기
+          <small>페이지 우상단의 `매크로 실행 중` 진행 배지를 표시하지 않습니다.</small>
+        </label>
+      </div>
+
+      <div class="button-grid two">
+        <button id="undoLastStepBtn">직전 기록 되돌리기</button>
+        <button id="stopRunBtn">실행 중지</button>
+      </div>
+
+      <div class="footer-note">
+        기록을 시작하면 팝업은 닫혀도 됩니다. 페이지와 관련 새 창에서 작업을 기록한 뒤 확장을 다시 열어 종료하면 됩니다.
+      </div>
+    </div>
+  </details>
+
+  <details class="panel panel-section" data-panel-key="quickAdd" open>
+    <summary class="panel-summary">
+      <span class="section-title">빠른 추가</span>
+    </summary>
+    <div class="panel-body">
+      <div class="button-grid">
+        <button data-wait="500">대기 0.5초</button>
+        <button data-wait="1000">대기 1초</button>
+        <button data-wait="2000">대기 2초</button>
+      </div>
+      <div class="button-grid two" style="margin-top:8px;">
+        <button data-wait="5000">대기 5초</button>
+        <button id="addWaitForTemplateBtn">waitFor 예시 추가</button>
+      </div>
+      <div class="button-grid two" style="margin-top:8px;">
+        <button id="addWaitForPopupTemplateBtn">waitForPopup 예시 추가</button>
+        <button disabled>새 창 자동감지 사용</button>
+      </div>
+    </div>
+  </details>
+
+  <details class="panel panel-section" data-panel-key="steps" open>
+    <summary class="panel-summary">
+      <span class="section-title">기록된 step</span>
+    </summary>
+    <div class="panel-body">
+      <div id="stepsMeta" class="steps-meta">0개</div>
+      <div id="emptyBox" class="empty">
+        아직 기록된 step이 없습니다.<br>
+        보통은 아래 순서로 사용하면 됩니다.<br><br>
+        1) 기록 전체 삭제<br>
+        2) 기록 시작<br>
+        3) 페이지에서 버튼 클릭 / 입력 / 선택<br>
+        4) 새 창이 뜨면 그 창에서도 계속 작업<br>
+        5) 기록 종료<br>
+        6) 지금 실행
+      </div>
+      <div id="stepsList" class="steps-list" style="display:none;"></div>
+    </div>
+  </details>
+
+  <details class="panel panel-section" data-panel-key="jsonEditor" open>
+    <summary class="panel-summary">
+      <span class="section-title">고급 편집(JSON)</span>
+    </summary>
+    <div class="panel-body">
       <textarea id="jsonEditor"></textarea>
       <div class="button-grid two" style="margin-top:8px;">
         <button id="applyJsonBtn">JSON 반영</button>
@@ -529,50 +579,62 @@
       <div class="footer-note">
         지원 타입: click, input, select, dropdownSelect, wait, waitFor, waitForPopup
       </div>
-    </details>
-  </div>
+    </div>
+  </details>
 
-  <div class="panel">
-    <div class="section-title">실행 결과</div>
-    <div id="resultBox">준비됨</div>
-    <div class="panel-actions">
-      <button id="copyErrorLogBtn">오류 로그 복사</button>
-      <button id="clearErrorLogBtn">오류 로그 삭제</button>
+  <details class="panel panel-section" data-panel-key="results" open>
+    <summary class="panel-summary">
+      <span class="section-title">실행 결과</span>
+    </summary>
+    <div class="panel-body">
+      <div id="resultBox">준비됨</div>
+      <div class="panel-actions">
+        <button id="copyErrorLogBtn">오류 로그 복사</button>
+        <button id="clearErrorLogBtn">오류 로그 삭제</button>
+      </div>
+      <div id="errorLogBox">오류 로그 없음</div>
     </div>
-    <div id="errorLogBox">오류 로그 없음</div>
-  </div>
+  </details>
 
-  <div class="panel">
-    <div class="section-title">실행 추적</div>
-    <div class="footer-note">
-      실행 step 시작, 선택자 탐색, 클릭 방식, 팝업 대기 후보와 실패 직전 상태를 저장합니다.
+  <details class="panel panel-section" data-panel-key="runTrace" open>
+    <summary class="panel-summary">
+      <span class="section-title">실행 추적</span>
+    </summary>
+    <div class="panel-body">
+      <div class="footer-note">
+        실행 step 시작, 선택자 탐색, 클릭 방식, 팝업 대기 후보와 실패 직전 상태를 저장합니다.
+      </div>
+      <div class="panel-actions">
+        <button id="toggleRunTraceBtn" class="primary">실행 추적 중지</button>
+        <button id="copyRunTraceLogBtn">실행 추적 복사</button>
+        <button id="clearRunTraceLogBtn">실행 추적 삭제</button>
+      </div>
+      <div class="panel-actions">
+        <button id="refreshRunTraceLogBtn">실행 추적 새로고침</button>
+      </div>
+      <div id="runTraceLogBox">실행 추적 없음</div>
     </div>
-    <div class="panel-actions">
-      <button id="toggleRunTraceBtn" class="primary">실행 추적 중지</button>
-      <button id="copyRunTraceLogBtn">실행 추적 복사</button>
-      <button id="clearRunTraceLogBtn">실행 추적 삭제</button>
-    </div>
-    <div class="panel-actions">
-      <button id="refreshRunTraceLogBtn">실행 추적 새로고침</button>
-    </div>
-    <div id="runTraceLogBox">실행 추적 없음</div>
-  </div>
+  </details>
 
-  <div class="panel">
-    <div class="section-title">디버그 기록</div>
-    <div class="footer-note">
-      문제가 나는 컨트롤을 재현할 때만 켜세요. 클릭/마우스 이벤트와 판별 결과를 저장합니다.
+  <details class="panel panel-section" data-panel-key="debug" open>
+    <summary class="panel-summary">
+      <span class="section-title">디버그 기록</span>
+    </summary>
+    <div class="panel-body">
+      <div class="footer-note">
+        문제가 나는 컨트롤을 재현할 때만 켜세요. 클릭/마우스 이벤트와 판별 결과를 저장합니다.
+      </div>
+      <div class="panel-actions">
+        <button id="toggleDebugBtn">디버그 켜기</button>
+        <button id="copyDebugLogBtn">디버그 로그 복사</button>
+      </div>
+      <div class="panel-actions">
+        <button id="clearDebugLogBtn">디버그 로그 삭제</button>
+        <button id="refreshDebugBtn">디버그 새로고침</button>
+      </div>
+      <div id="debugLogBox">디버그 로그 없음</div>
     </div>
-    <div class="panel-actions">
-      <button id="toggleDebugBtn">디버그 켜기</button>
-      <button id="copyDebugLogBtn">디버그 로그 복사</button>
-    </div>
-    <div class="panel-actions">
-      <button id="clearDebugLogBtn">디버그 로그 삭제</button>
-      <button id="refreshDebugBtn">디버그 새로고침</button>
-    </div>
-    <div id="debugLogBox">디버그 로그 없음</div>
-  </div>
+  </details>
 
   <script src="popup.js"></script>
 </body>

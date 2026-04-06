@@ -179,6 +179,72 @@ async function dispatchContentRuntimeMessage(listener, message, sender = {}) {
   });
 }
 
+function createApprovalGuardElement(tagName, text, options = {}) {
+  return {
+    nodeType: 1,
+    tagName,
+    ownerDocument: null,
+    innerText: text,
+    textContent: text,
+    childElementCount: options.childElementCount ?? 1,
+    getBoundingClientRect() {
+      return {
+        width: 120,
+        height: 24
+      };
+    },
+    getAttribute(name) {
+      if (name === "role") {
+        return options.role || "";
+      }
+
+      return "";
+    }
+  };
+}
+
+function createApprovalGuardWindow({ containers = [], frames = [] } = {}) {
+  const document = {
+    activeElement: null,
+    defaultView: null,
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "iframe, frame") {
+        return frames;
+      }
+
+      if (selector === "tr, [role='row'], li, section, article, div") {
+        return containers;
+      }
+
+      return [];
+    }
+  };
+
+  const window = {
+    document,
+    getComputedStyle() {
+      return {
+        display: "block",
+        visibility: "visible",
+        opacity: "1"
+      };
+    }
+  };
+
+  document.defaultView = window;
+  containers.forEach((entry) => {
+    entry.ownerDocument = document;
+  });
+  frames.forEach((entry) => {
+    entry.ownerDocument = document;
+  });
+
+  return window;
+}
+
 test("persistRecordedSteps falls back to storage when runtime response channel closes", async () => {
   const harness = loadContentHarness({
     sendMessageImpl: async () => {
@@ -403,6 +469,59 @@ test("querySelectorDeep prefers iframe descendants over same-selector hidden inp
   frameElement.ownerDocument = topDocument;
 
   assert.equal(harness.hooks.querySelectorDeep("#userPassword", topWindow), childTarget);
+});
+
+test("findApprovalGuardMatch blocks when the closing department row contains 전결", () => {
+  const harness = loadContentHarness();
+  const row = createApprovalGuardElement("TR", "마감부서 재무기획팀 전결");
+  const topWindow = createApprovalGuardWindow({
+    containers: [row]
+  });
+
+  assert.deepEqual(normalize(harness.hooks.findApprovalGuardMatch(topWindow)), {
+    blocked: true,
+    matchedText: "마감부서 재무기획팀 전결"
+  });
+});
+
+test("findApprovalGuardMatch ignores unrelated 전결 text outside the closing department block", () => {
+  const harness = loadContentHarness();
+  const row = createApprovalGuardElement("TR", "마감부서 재무기획팀");
+  const stray = createApprovalGuardElement("DIV", "전결 처리 안내");
+  const root = createApprovalGuardElement(
+    "DIV",
+    `마감부서 재무기획팀 ${"안내 ".repeat(90)}전결 처리 안내`,
+    {
+      childElementCount: 12
+    }
+  );
+  const topWindow = createApprovalGuardWindow({
+    containers: [root, row, stray]
+  });
+
+  assert.deepEqual(normalize(harness.hooks.findApprovalGuardMatch(topWindow)), {
+    blocked: false,
+    matchedText: ""
+  });
+});
+
+test("findApprovalGuardMatch scans same-origin child frames", () => {
+  const harness = loadContentHarness();
+  const childRow = createApprovalGuardElement("TR", "마감부서 재무기획팀 전결");
+  const childWindow = createApprovalGuardWindow({
+    containers: [childRow]
+  });
+  const frame = {
+    nodeType: 1,
+    tagName: "IFRAME",
+    contentWindow: childWindow
+  };
+  const topWindow = createApprovalGuardWindow({
+    containers: [],
+    frames: [frame]
+  });
+
+  assert.equal(harness.hooks.findApprovalGuardMatch(topWindow).blocked, true);
 });
 
 test("RUN_SINGLE_STEP does not render the run overlay when hideRunOverlay is enabled", async () => {

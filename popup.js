@@ -9,6 +9,7 @@ const addWaitForTemplateBtn = document.getElementById("addWaitForTemplateBtn");
 const addWaitForPopupTemplateBtn = document.getElementById("addWaitForPopupTemplateBtn");
 const repeatCountInput = document.getElementById("repeatCountInput");
 const repeatDelayInput = document.getElementById("repeatDelayInput");
+const allowSingleApprovalInput = document.getElementById("allowSingleApprovalInput");
 const restartOnErrorInput = document.getElementById("restartOnErrorInput");
 const hideRunOverlayInput = document.getElementById("hideRunOverlayInput");
 const macroNameInput = document.getElementById("macroNameInput");
@@ -40,14 +41,35 @@ const copyDebugLogBtn = document.getElementById("copyDebugLogBtn");
 const clearDebugLogBtn = document.getElementById("clearDebugLogBtn");
 const refreshDebugBtn = document.getElementById("refreshDebugBtn");
 const debugLogBox = document.getElementById("debugLogBox");
+const panelSections = [...document.querySelectorAll(".panel-section")];
 
 const ERROR_LOGS_KEY = "macroErrorLogs";
 const DEBUG_LOGS_KEY = "macroDebugLogs";
 const RUN_TRACE_LOGS_KEY = "macroRunTraceLogs";
+const WORKSPACE_STATE_KEY = "macroWorkspaceState";
+const POPUP_UI_STATE_KEY = "macroPopupUiState";
+const DEFAULT_PANEL_STATES = {
+  savedMacros: true,
+  controls: true,
+  quickAdd: true,
+  steps: true,
+  jsonEditor: true,
+  results: true,
+  runTrace: true,
+  debug: true
+};
 
 let currentData = {
   steps: [],
   savedMacros: [],
+  workspace: {
+    allowSingleApproval: false
+  },
+  popupUi: {
+    panels: {
+      ...DEFAULT_PANEL_STATES
+    }
+  },
   recording: {
     enabled: false,
     rootTabId: null,
@@ -61,7 +83,8 @@ let currentData = {
     lastMessage: "대기",
     error: "",
     restartOnError: false,
-    hideRunOverlay: false
+    hideRunOverlay: false,
+    allowSingleApproval: false
   },
   errorLogs: [],
   runTrace: {
@@ -80,6 +103,70 @@ let draggingStepIndex = null;
 
 function setResult(text) {
   resultBox.textContent = text;
+}
+
+function normalizeWorkspaceState(state) {
+  return {
+    allowSingleApproval: !!state?.allowSingleApproval
+  };
+}
+
+function normalizePopupUiState(state) {
+  const panels = {
+    ...DEFAULT_PANEL_STATES
+  };
+
+  if (state?.panels && typeof state.panels === "object") {
+    for (const key of Object.keys(panels)) {
+      if (key in state.panels) {
+        panels[key] = !!state.panels[key];
+      }
+    }
+  }
+
+  return {
+    panels
+  };
+}
+
+function applyPanelState() {
+  currentData.popupUi = normalizePopupUiState(currentData.popupUi);
+
+  panelSections.forEach((panel) => {
+    const key = panel.getAttribute("data-panel-key");
+    if (!key) return;
+
+    const shouldOpen = currentData.popupUi.panels[key] !== false;
+    if (panel.open !== shouldOpen) {
+      panel.open = shouldOpen;
+    }
+  });
+}
+
+async function persistWorkspaceState(nextState) {
+  currentData.workspace = normalizeWorkspaceState({
+    ...(currentData.workspace || {}),
+    ...(nextState || {})
+  });
+
+  await chrome.storage.local.set({
+    [WORKSPACE_STATE_KEY]: currentData.workspace
+  });
+
+  if (!currentData.run?.running) {
+    allowSingleApprovalInput.checked = !!currentData.workspace.allowSingleApproval;
+  }
+}
+
+async function persistPopupUiState(nextState) {
+  currentData.popupUi = normalizePopupUiState({
+    ...(currentData.popupUi || {}),
+    ...(nextState || {})
+  });
+
+  await chrome.storage.local.set({
+    [POPUP_UI_STATE_KEY]: currentData.popupUi
+  });
 }
 
 function normalizeErrorText(message) {
@@ -288,6 +375,7 @@ function renderControls() {
   stopRunBtn.disabled = !run.running;
   repeatCountInput.disabled = !!run.running;
   repeatDelayInput.disabled = !!run.running;
+  allowSingleApprovalInput.disabled = !!run.running;
   restartOnErrorInput.disabled = !!run.running;
   hideRunOverlayInput.disabled = !!run.running;
 }
@@ -955,6 +1043,8 @@ async function loadData() {
     currentData = {
       steps: Array.isArray(response.steps) ? response.steps : [],
       savedMacros: Array.isArray(response.savedMacros) ? response.savedMacros : [],
+      workspace: normalizeWorkspaceState(response.workspace || {}),
+      popupUi: normalizePopupUiState(response.popupUi || {}),
       recording: response.recording || {
         enabled: false,
         rootTabId: null,
@@ -968,7 +1058,8 @@ async function loadData() {
         lastMessage: "대기",
         error: "",
         restartOnError: false,
-        hideRunOverlay: false
+        hideRunOverlay: false,
+        allowSingleApproval: false
       },
       errorLogs: Array.isArray(response.errorLogs) ? response.errorLogs : [],
       runTrace: response.runTrace || {
@@ -986,10 +1077,14 @@ async function loadData() {
     }
 
     if (currentData.run?.running) {
+      allowSingleApprovalInput.checked = !!currentData.run.allowSingleApproval;
       restartOnErrorInput.checked = !!currentData.run.restartOnError;
       hideRunOverlayInput.checked = !!currentData.run.hideRunOverlay;
+    } else {
+      allowSingleApprovalInput.checked = !!currentData.workspace.allowSingleApproval;
     }
 
+    applyPanelState();
     renderStatus();
     renderSteps();
     renderSavedMacros();
@@ -1056,6 +1151,7 @@ async function runMacro() {
 
   const repeatCount = Number.parseInt(repeatCountInput.value, 10);
   const repeatDelayMs = Number.parseInt(repeatDelayInput.value, 10);
+  const allowSingleApproval = !!currentData.workspace?.allowSingleApproval;
   const restartOnError = !!restartOnErrorInput.checked;
   const hideRunOverlay = !!hideRunOverlayInput.checked;
 
@@ -1073,6 +1169,7 @@ async function runMacro() {
     steps,
     repeatCount,
     repeatDelayMs,
+    allowSingleApproval,
     restartOnError,
     hideRunOverlay
   });
@@ -1128,7 +1225,8 @@ async function saveCurrentMacro() {
   const response = await sendRuntimeMessage({
     type: "SAVE_MACRO",
     name,
-    steps
+    steps,
+    allowSingleApproval: !!currentData.workspace?.allowSingleApproval
   });
 
   if (!response?.ok) {
@@ -1150,6 +1248,9 @@ async function loadSavedMacro() {
   }
 
   editingStepIndex = null;
+  await persistWorkspaceState({
+    allowSingleApproval: !!macro.allowSingleApproval
+  });
   await setSteps(macro.steps || []);
   macroNameInput.value = macro.name;
   setResult(`매크로 불러오기 완료: ${macro.name}`);
@@ -1159,6 +1260,11 @@ async function deleteSelectedMacro() {
   const macro = getSelectedSavedMacro();
   if (!macro) {
     throw new Error("삭제할 저장 매크로를 선택하세요.");
+  }
+
+  const confirmed = window.confirm(`'${macro.name}' 저장 매크로를 삭제할까요?`);
+  if (!confirmed) {
+    return;
   }
 
   const response = await sendRuntimeMessage({
@@ -1319,6 +1425,44 @@ deleteMacroBtn.addEventListener("click", async () => {
 savedMacroSelect.addEventListener("change", () => {
   renderSavedMacros();
   renderControls();
+});
+
+allowSingleApprovalInput.addEventListener("change", async () => {
+  try {
+    await persistWorkspaceState({
+      allowSingleApproval: !!allowSingleApprovalInput.checked
+    });
+    setResult(
+      allowSingleApprovalInput.checked
+        ? "전결문서 허용 상태로 변경됨"
+        : "전결문서 허용 해제됨"
+    );
+  } catch (error) {
+    await handleUiError(error, "popup:setWorkspaceState");
+  }
+});
+
+panelSections.forEach((panel) => {
+  panel.addEventListener("toggle", () => {
+    const key = panel.getAttribute("data-panel-key");
+    if (!key) return;
+
+    currentData.popupUi = normalizePopupUiState(currentData.popupUi);
+    if (currentData.popupUi.panels[key] === panel.open) {
+      return;
+    }
+
+    persistPopupUiState({
+      panels: {
+        ...currentData.popupUi.panels,
+        [key]: panel.open
+      }
+    }).catch((error) => {
+      handleUiError(error, "popup:setPopupUiState").catch(() => {
+        // ignore nested error handling failure
+      });
+    });
+  });
 });
 
 document.querySelectorAll("button[data-wait]").forEach((button) => {

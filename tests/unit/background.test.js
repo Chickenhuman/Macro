@@ -1033,6 +1033,7 @@ test("SAVE_MACRO stores and overwrites saved macros by name", async () => {
   const firstResponse = await dispatchRuntimeMessage(listener, {
     type: "SAVE_MACRO",
     name: "기본 흐름",
+    allowSingleApproval: true,
     steps: [
       {
         type: "click",
@@ -1045,10 +1046,12 @@ test("SAVE_MACRO stores and overwrites saved macros by name", async () => {
   assert.equal(firstResponse.ok, true);
   assert.equal(firstResponse.savedMacros.length, 1);
   assert.equal(firstResponse.savedMacros[0].name, "기본 흐름");
+  assert.equal(firstResponse.savedMacros[0].allowSingleApproval, true);
 
   const secondResponse = await dispatchRuntimeMessage(listener, {
     type: "SAVE_MACRO",
     name: "기본 흐름",
+    allowSingleApproval: false,
     steps: [
       {
         type: "click",
@@ -1060,6 +1063,7 @@ test("SAVE_MACRO stores and overwrites saved macros by name", async () => {
 
   assert.equal(secondResponse.ok, true);
   assert.equal(secondResponse.savedMacros.length, 1);
+  assert.equal(secondResponse.savedMacros[0].allowSingleApproval, false);
   assert.deepEqual(normalize(secondResponse.savedMacros[0].steps), [
     {
       type: "click",
@@ -1151,6 +1155,9 @@ test("GET_DATA clears the current step workspace on the first popup load of a br
       ms: 500
     }
   ];
+  harness.storage.macroWorkspaceState = {
+    allowSingleApproval: true
+  };
   harness.storage.savedMacros = [
     {
       id: "saved-1",
@@ -1173,6 +1180,12 @@ test("GET_DATA clears the current step workspace on the first popup load of a br
   assert.equal(response.ok, true);
   assert.deepEqual(normalize(response.steps), []);
   assert.deepEqual(normalize(harness.storage.macroSteps), []);
+  assert.deepEqual(normalize(response.workspace), {
+    allowSingleApproval: false
+  });
+  assert.deepEqual(normalize(harness.storage.macroWorkspaceState), {
+    allowSingleApproval: false
+  });
   assert.equal(harness.sessionStorage.macroWorkspaceSessionInitialized, true);
   assert.equal(response.savedMacros.length, 1);
   assert.equal(response.savedMacros[0].name, "기본 저장");
@@ -1346,6 +1359,195 @@ test("continueMacroRun repeats the full macro for the requested repeat count", a
   assert.equal(runSingleStepCalls, 2);
   assert.equal(harness.storage.macroRunState.running, false);
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료 (2회 반복)");
+});
+
+test("continueMacroRun blocks dangerous approval clicks when single approval is not allowed", async () => {
+  const harness = loadBackgroundHarness();
+  let runSingleStepCalls = 0;
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "CHECK_APPROVAL_GUARD") {
+      return {
+        ok: true,
+        blocked: true,
+        matchedText: "마감부서 재무기획팀 전결"
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#set_apprv",
+        label: "반영"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null,
+    allowSingleApproval: false
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(runSingleStepCalls, 0);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(
+    harness.storage.macroRunState.lastMessage,
+    "오류: 전결문서 체크 없이 마감부서 줄에서 '전결'이 감지되어 실행을 중단했습니다."
+  );
+  assert.equal(
+    harness.storage.macroRunTraceLogs.some((entry) => entry.eventType === "approval-guard-blocked"),
+    true
+  );
+});
+
+test("continueMacroRun allows dangerous approval clicks when single approval is allowed", async () => {
+  const harness = loadBackgroundHarness();
+  let runSingleStepCalls = 0;
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "CHECK_APPROVAL_GUARD") {
+      return {
+        ok: true,
+        blocked: true,
+        matchedText: "마감부서 재무기획팀 전결"
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#set_apprv",
+        label: "반영"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null,
+    allowSingleApproval: true
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(runSingleStepCalls, 1);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
+test("continueMacroRun skips the approval guard for non-dangerous clicks", async () => {
+  const harness = loadBackgroundHarness();
+  let guardChecks = 0;
+  let runSingleStepCalls = 0;
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "CHECK_APPROVAL_GUARD") {
+      guardChecks += 1;
+      return {
+        ok: true,
+        blocked: true,
+        matchedText: "마감부서 재무기획팀 전결"
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#previewBtn",
+        label: "미리보기"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null,
+    allowSingleApproval: false
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(guardChecks, 0);
+  assert.equal(runSingleStepCalls, 1);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
 });
 
 test("continueMacroRun treats a failed iteration as complete and moves to the next repeat when restartOnError is enabled", async () => {
@@ -2306,6 +2508,7 @@ test("START_MACRO_RUN enables native dialog auto-accept and STOP_MACRO_RUN disab
   const startResponse = await dispatchRuntimeMessage(listener, {
     type: "START_MACRO_RUN",
     tabId: 1,
+    allowSingleApproval: true,
     steps: [
       {
         type: "wait",
@@ -2315,6 +2518,7 @@ test("START_MACRO_RUN enables native dialog auto-accept and STOP_MACRO_RUN disab
   });
 
   assert.equal(startResponse.ok, true);
+  assert.equal(harness.storage.macroRunState.allowSingleApproval, true);
   assert.equal(harness.executeScriptCalls.length > 0, true);
   const enabledCall = harness.executeScriptCalls.find((call) => call.world === "MAIN");
   assert.equal(enabledCall?.world, "MAIN");

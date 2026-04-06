@@ -819,6 +819,44 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/approval-guard.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Approval Guard",
+          `
+            <table border="1" cellpadding="6" cellspacing="0">
+              <tbody>
+                <tr>
+                  <th>작성부서</th>
+                  <td>관리팀</td>
+                </tr>
+                <tr>
+                  <th>마감부서</th>
+                  <td>재무기획팀 전결</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+              <input id="set_apprv" type="button" value="반영" onclick="applyApproval();" />
+            </div>
+            <button id="previewBtn" type="button">미리보기</button>
+            <div id="result"></div>
+          `,
+          `
+            window.applyApproval = function() {
+              document.querySelector("#result").textContent = "approved";
+            };
+
+            document.querySelector("#previewBtn").addEventListener("click", () => {
+              document.querySelector("#result").textContent = "previewed";
+            });
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/synthetic-mousedown-sensitive.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -1051,6 +1089,8 @@ async function readStorage(extensionPage) {
     return await chrome.storage.local.get([
       "macroSteps",
       "savedMacros",
+      "macroWorkspaceState",
+      "macroPopupUiState",
       "macroRecordingState",
       "macroRunState",
       "macroErrorLogs",
@@ -2152,6 +2192,61 @@ test.describe("extension smoke tests", () => {
     expect(dialogSeen).toBe(false);
   });
 
+  test("blocks dangerous approval clicks when single approval is not allowed", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/approval-guard.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      allowSingleApproval: false,
+      steps: [
+        {
+          type: "click",
+          selector: "#set_apprv",
+          label: "반영"
+        }
+      ]
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return storage.macroRunState?.lastMessage || "";
+      })
+      .toContain("전결문서 체크 없이 마감부서 줄에서 '전결'이 감지되어 실행을 중단했습니다.");
+
+    await expect(runPage.locator("#result")).toHaveText("");
+  });
+
+  test("allows dangerous approval clicks when single approval is allowed", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/approval-guard.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      allowSingleApproval: true,
+      steps: [
+        {
+          type: "click",
+          selector: "#set_apprv",
+          label: "반영"
+        }
+      ]
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect(runPage.locator("#result")).toHaveText("approved");
+  });
+
   test("saves and reloads named macros from the popup UI", async () => {
     const steps = [
       {
@@ -2171,6 +2266,7 @@ test.describe("extension smoke tests", () => {
     });
     expect(setResponse.ok).toBe(true);
 
+    await extensionPage.check("#allowSingleApprovalInput");
     await extensionPage.fill("#macroNameInput", "기본 저장");
     await extensionPage.click("#saveMacroBtn");
 
@@ -2189,6 +2285,9 @@ test.describe("extension smoke tests", () => {
         return (storage.macroSteps || []).length;
       })
       .toBe(0);
+
+    await extensionPage.uncheck("#allowSingleApprovalInput");
+    await expect(extensionPage.locator("#allowSingleApprovalInput")).not.toBeChecked();
 
     await extensionPage.selectOption("#savedMacroSelect", { label: "기본 저장" });
     await extensionPage.click("#loadMacroBtn");
@@ -2217,6 +2316,76 @@ test.describe("extension smoke tests", () => {
           ms: 1000
         }
       ]);
+
+    await expect(extensionPage.locator("#allowSingleApprovalInput")).toBeChecked();
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return !!storage.macroWorkspaceState?.allowSingleApproval;
+      })
+      .toBe(true);
+  });
+
+  test("asks for confirmation before deleting a saved macro", async () => {
+    const setResponse = await sendRuntimeMessage(extensionPage, {
+      type: "SET_STEPS",
+      steps: [
+        {
+          type: "wait",
+          ms: 500
+        }
+      ]
+    });
+    expect(setResponse.ok).toBe(true);
+
+    await extensionPage.fill("#macroNameInput", "삭제 확인");
+    await extensionPage.click("#saveMacroBtn");
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return (storage.savedMacros || []).length;
+      })
+      .toBe(1);
+
+    await extensionPage.selectOption("#savedMacroSelect", { label: "삭제 확인" });
+
+    await extensionPage.evaluate(() => {
+      window.__deleteConfirmMessages = [];
+      window.__deleteConfirmResponse = false;
+      window.confirm = (message) => {
+        window.__deleteConfirmMessages.push(String(message || ""));
+        return !!window.__deleteConfirmResponse;
+      };
+    });
+
+    await extensionPage.click("#deleteMacroBtn");
+
+    await expect
+      .poll(async () => {
+        return await extensionPage.evaluate(() => window.__deleteConfirmMessages.slice());
+      })
+      .toEqual(["'삭제 확인' 저장 매크로를 삭제할까요?"]);
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return (storage.savedMacros || []).length;
+      })
+      .toBe(1);
+
+    await extensionPage.evaluate(() => {
+      window.__deleteConfirmResponse = true;
+    });
+
+    await extensionPage.click("#deleteMacroBtn");
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return (storage.savedMacros || []).length;
+      })
+      .toBe(0);
   });
 
   test("opens with an empty workspace and requires explicit saved macro loading in a new browser session", async () => {
@@ -2271,6 +2440,35 @@ test.describe("extension smoke tests", () => {
         return storage.macroSteps?.[0]?.ms || 0;
       })
       .toBe(500);
+  });
+
+  test("persists panel collapse state across popup reopen", async () => {
+    const quickAddPanel = extensionPage.locator('[data-panel-key="quickAdd"]');
+    const quickAddSummary = extensionPage.locator('[data-panel-key="quickAdd"] > summary');
+
+    await quickAddSummary.click();
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return storage.macroPopupUiState?.panels?.quickAdd;
+      })
+      .toBe(false);
+
+    await expect
+      .poll(async () => {
+        return await quickAddPanel.evaluate((node) => node.open);
+      })
+      .toBe(false);
+
+    await extensionPage.close();
+    extensionPage = await getExtensionPage(bundle.context, bundle.extensionId);
+
+    await expect
+      .poll(async () => {
+        return await extensionPage.locator('[data-panel-key="quickAdd"]').evaluate((node) => node.open);
+      })
+      .toBe(false);
   });
 
   test("reorders steps by dragging in the popup UI", async () => {

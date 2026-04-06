@@ -20,6 +20,7 @@
   const RECORDING_KEY = "macroRecordingState";
   const RECORD_STATE_EVENT_TYPE = "__EASY_WEB_MACRO_RECORD_STATE__";
   const FRAME_READY_EVENT_TYPE = "__EASY_WEB_MACRO_FRAME_READY__";
+  const APPROVAL_GUARD_CONTAINER_SELECTOR = "tr, [role='row'], li, section, article, div";
 
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1032,6 +1033,79 @@
     }
 
     return results;
+  }
+
+  function isVisibleForApprovalGuard(el) {
+    if (!isElementNode(el)) return false;
+
+    try {
+      return isVisible(el);
+    } catch {
+      return true;
+    }
+  }
+
+  function getApprovalGuardText(el) {
+    return normalizeText(el?.innerText || el?.textContent || "");
+  }
+
+  function getApprovalGuardContainerWeight(el, text) {
+    const tagName = String(el?.tagName || "").toLowerCase();
+    const role = String(el?.getAttribute?.("role") || "").toLowerCase();
+    let weight = text.length;
+
+    if (tagName === "tr" || role === "row") {
+      weight -= 60;
+    } else if (tagName === "li") {
+      weight -= 40;
+    } else if (tagName === "section" || tagName === "article") {
+      weight -= 20;
+    }
+
+    return weight;
+  }
+
+  function shouldInspectApprovalGuardContainer(el, text) {
+    if (!text || !text.includes("마감부서")) {
+      return false;
+    }
+
+    const tagName = String(el?.tagName || "").toLowerCase();
+    if (["div", "section", "article"].includes(tagName)) {
+      if ((el?.childElementCount || 0) > 10) {
+        return false;
+      }
+
+      if (text.length > 220) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function findApprovalGuardMatch(rootWindow = window) {
+    const matches = collectQuerySelectorAllDeep(APPROVAL_GUARD_CONTAINER_SELECTOR, rootWindow)
+      .filter((el) => isVisibleForApprovalGuard(el))
+      .map((el) => ({
+        el,
+        text: getApprovalGuardText(el)
+      }))
+      .filter((entry) => shouldInspectApprovalGuardContainer(entry.el, entry.text))
+      .sort((a, b) => getApprovalGuardContainerWeight(a.el, a.text) - getApprovalGuardContainerWeight(b.el, b.text));
+
+    const matched = matches.find((entry) => entry.text.includes("전결"));
+    if (!matched) {
+      return {
+        blocked: false,
+        matchedText: ""
+      };
+    }
+
+    return {
+      blocked: true,
+      matchedText: matched.text.slice(0, 200)
+    };
   }
 
   async function tryRecordPendingDropdownChange() {
@@ -2991,6 +3065,14 @@
           return;
         }
 
+        if (message?.type === "CHECK_APPROVAL_GUARD") {
+          sendResponse({
+            ok: true,
+            ...findApprovalGuardMatch()
+          });
+          return;
+        }
+
         if (message?.type === "RUN_SINGLE_STEP") {
           const result = await runSingleStep(message.step, message.index || 0, {
             hideRunOverlay: !!message.hideRunOverlay,
@@ -3026,7 +3108,8 @@
       persistRecordedSteps,
       isElementNode,
       querySelectorDeep,
-      collectQuerySelectorAllDeep
+      collectQuerySelectorAllDeep,
+      findApprovalGuardMatch
     });
   }
 })();

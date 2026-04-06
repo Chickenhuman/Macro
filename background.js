@@ -1,5 +1,7 @@
 const STEPS_KEY = "macroSteps";
 const SAVED_MACROS_KEY = "savedMacros";
+const WORKSPACE_STATE_KEY = "macroWorkspaceState";
+const POPUP_UI_STATE_KEY = "macroPopupUiState";
 const RECORDING_KEY = "macroRecordingState";
 const RUN_KEY = "macroRunState";
 const ERROR_LOGS_KEY = "macroErrorLogs";
@@ -9,6 +11,10 @@ const RUN_TRACE_STATE_KEY = "macroRunTraceState";
 const RUN_TRACE_LOGS_KEY = "macroRunTraceLogs";
 const WORKSPACE_SESSION_KEY = "macroWorkspaceSessionInitialized";
 const POPUP_WAIT_ALARM = "macroPopupWaitTimeout";
+
+const DANGEROUS_APPROVAL_CLICK_KEYWORDS = ["결재", "반영", "approve", "set_apprv"];
+const SINGLE_APPROVAL_BLOCK_MESSAGE =
+  "전결문서 체크 없이 마감부서 줄에서 '전결'이 감지되어 실행을 중단했습니다.";
 
 const DEFAULT_RECORDING_STATE = {
   enabled: false,
@@ -52,7 +58,25 @@ const DEFAULT_RUN_STATE = {
   repeatDelayMs: 0,
   iteration: 1,
   restartOnError: false,
-  hideRunOverlay: false
+  hideRunOverlay: false,
+  allowSingleApproval: false
+};
+
+const DEFAULT_WORKSPACE_STATE = {
+  allowSingleApproval: false
+};
+
+const DEFAULT_POPUP_UI_STATE = {
+  panels: {
+    savedMacros: true,
+    controls: true,
+    quickAdd: true,
+    steps: true,
+    jsonEditor: true,
+    results: true,
+    runTrace: true,
+    debug: true
+  }
 };
 
 const DEFAULT_DEBUG_STATE = {
@@ -341,6 +365,56 @@ async function setSteps(steps) {
   });
 }
 
+function sanitizeWorkspaceState(state) {
+  return {
+    allowSingleApproval: !!state?.allowSingleApproval
+  };
+}
+
+async function getWorkspaceState() {
+  const data = await chrome.storage.local.get(WORKSPACE_STATE_KEY);
+  return sanitizeWorkspaceState(data[WORKSPACE_STATE_KEY] || {});
+}
+
+async function setWorkspaceState(state) {
+  const nextState = sanitizeWorkspaceState(state);
+  await chrome.storage.local.set({
+    [WORKSPACE_STATE_KEY]: nextState
+  });
+  return nextState;
+}
+
+function sanitizePopupUiState(state) {
+  const panels = {
+    ...DEFAULT_POPUP_UI_STATE.panels
+  };
+
+  if (state?.panels && typeof state.panels === "object") {
+    for (const key of Object.keys(panels)) {
+      if (key in state.panels) {
+        panels[key] = !!state.panels[key];
+      }
+    }
+  }
+
+  return {
+    panels
+  };
+}
+
+async function getPopupUiState() {
+  const data = await chrome.storage.local.get(POPUP_UI_STATE_KEY);
+  return sanitizePopupUiState(data[POPUP_UI_STATE_KEY] || {});
+}
+
+async function setPopupUiState(state) {
+  const nextState = sanitizePopupUiState(state);
+  await chrome.storage.local.set({
+    [POPUP_UI_STATE_KEY]: nextState
+  });
+  return nextState;
+}
+
 async function ensureWorkspaceDefaultsForSession() {
   if (!chrome.storage?.session?.get || !chrome.storage?.session?.set) {
     return;
@@ -354,7 +428,7 @@ async function ensureWorkspaceDefaultsForSession() {
   const [recording, runState] = await Promise.all([getRecordingState(), getRunState()]);
 
   if (!recording.enabled && !recording.initializing && !runState.running) {
-    await setSteps([]);
+    await Promise.all([setSteps([]), setWorkspaceState(DEFAULT_WORKSPACE_STATE)]);
   }
 
   await chrome.storage.session.set({
@@ -390,6 +464,7 @@ function sanitizeSavedMacro(entry) {
     id: String(entry.id || createSavedMacroId()),
     name,
     steps,
+    allowSingleApproval: !!entry.allowSingleApproval,
     createdAt,
     updatedAt
   };
@@ -423,7 +498,7 @@ async function setSavedMacros(entries) {
   return normalized;
 }
 
-async function saveMacro(name, steps) {
+async function saveMacro(name, steps, options = {}) {
   const trimmedName = String(name || "").trim();
   if (!trimmedName) {
     throw new Error("저장할 매크로 이름을 입력하세요.");
@@ -442,6 +517,7 @@ async function saveMacro(name, steps) {
     id: existing?.id || createSavedMacroId(),
     name: trimmedName,
     steps: sanitizedSteps,
+    allowSingleApproval: !!options.allowSingleApproval,
     createdAt: existing?.createdAt || now,
     updatedAt: now
   });
@@ -712,6 +788,7 @@ async function setRunState(state) {
     Number.isInteger(nextState.iteration) && nextState.iteration > 0 ? nextState.iteration : 1;
   nextState.restartOnError = !!nextState.restartOnError;
   nextState.hideRunOverlay = !!nextState.hideRunOverlay;
+  nextState.allowSingleApproval = !!nextState.allowSingleApproval;
 
   if (!nextState.running) {
     nextState.rootTabId = null;
@@ -738,6 +815,7 @@ async function setRunState(state) {
     nextState.iteration = 1;
     nextState.restartOnError = false;
     nextState.hideRunOverlay = false;
+    nextState.allowSingleApproval = false;
   }
 
   await chrome.storage.local.set({
@@ -1799,6 +1877,76 @@ async function stopRun(message) {
   });
 }
 
+function buildApprovalRiskText(step) {
+  if (!step || typeof step !== "object") {
+    return "";
+  }
+
+  return [step.label, step.selector, step.value]
+    .filter((value) => typeof value === "string" && value.trim())
+    .join(" ")
+    .toLowerCase();
+}
+
+function isApprovalRiskStep(step) {
+  if (!step || step.type !== "click") {
+    return false;
+  }
+
+  const riskText = buildApprovalRiskText(step);
+  return DANGEROUS_APPROVAL_CLICK_KEYWORDS.some((keyword) =>
+    riskText.includes(String(keyword).toLowerCase())
+  );
+}
+
+async function enforceSingleApprovalGuard(runState, step, tab) {
+  if (runState.allowSingleApproval || !isApprovalRiskStep(step)) {
+    return {
+      checked: false,
+      blocked: false
+    };
+  }
+
+  const response = await sendTabMessageToFrame(
+    runState.currentTabId,
+    {
+      type: "CHECK_APPROVAL_GUARD"
+    },
+    0
+  );
+
+  if (!response?.ok) {
+    throw new Error(response?.message || "전결 안전 검사 실패");
+  }
+
+  if (!response.blocked) {
+    return {
+      checked: true,
+      blocked: false
+    };
+  }
+
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "approval-guard-blocked",
+    tabId: runState.currentTabId,
+    stepIndex: runState.stepIndex,
+    stepType: step.type,
+    message: SINGLE_APPROVAL_BLOCK_MESSAGE,
+    step,
+    detail: {
+      currentTab: summarizeTabForTrace(tab),
+      matchedText: String(response.matchedText || "")
+    }
+  });
+
+  await failRun(SINGLE_APPROVAL_BLOCK_MESSAGE);
+  return {
+    checked: true,
+    blocked: true
+  };
+}
+
 async function attachRecordingToExistingRelatedTabs(rootTabId) {
   if (!isFiniteTabId(rootTabId)) {
     return await getRecordingState();
@@ -2836,6 +2984,11 @@ async function continueMacroRunInternal(passedState) {
 
       await ensureContentReady(runState.currentTabId);
 
+      const approvalGuard = await enforceSingleApprovalGuard(runState, step, tab);
+      if (approvalGuard.blocked) {
+        return;
+      }
+
       const resolvedFrame = await resolveRunStepFrame(
         runState.currentTabId,
         step,
@@ -3117,6 +3270,8 @@ chrome.runtime.onInstalled.addListener(async () => {
   const data = await chrome.storage.local.get([
     STEPS_KEY,
     SAVED_MACROS_KEY,
+    WORKSPACE_STATE_KEY,
+    POPUP_UI_STATE_KEY,
     RECORDING_KEY,
     RUN_KEY,
     ERROR_LOGS_KEY,
@@ -3132,6 +3287,14 @@ chrome.runtime.onInstalled.addListener(async () => {
 
   if (!Array.isArray(data[SAVED_MACROS_KEY])) {
     await setSavedMacros([]);
+  }
+
+  if (!data[WORKSPACE_STATE_KEY]) {
+    await setWorkspaceState(DEFAULT_WORKSPACE_STATE);
+  }
+
+  if (!data[POPUP_UI_STATE_KEY]) {
+    await setPopupUiState(DEFAULT_POPUP_UI_STATE);
   }
 
   if (!data[RECORDING_KEY]) {
@@ -3341,10 +3504,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       switch (message?.type) {
         case "GET_DATA": {
           await ensureWorkspaceDefaultsForSession();
-          const [steps, savedMacros, recording, runState, errorLogs, debug, runTrace, debugLogs, runTraceLogs] =
+          const [steps, savedMacros, workspace, popupUi, recording, runState, errorLogs, debug, runTrace, debugLogs, runTraceLogs] =
             await Promise.all([
             getSteps(),
             getSavedMacros(),
+            getWorkspaceState(),
+            getPopupUiState(),
             getRecordingState(),
             getRunState(),
             getErrorLogs(),
@@ -3358,6 +3523,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             ok: true,
             steps,
             savedMacros,
+            workspace,
+            popupUi,
             recording,
             run: runState,
             errorLogs,
@@ -3491,6 +3658,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               : 800;
           const restartOnError = !!message.restartOnError && repeatCount > 1;
           const hideRunOverlay = !!message.hideRunOverlay;
+          const allowSingleApproval = !!message.allowSingleApproval;
 
           if (currentRun.running) {
             throw new Error("이미 매크로를 실행 중입니다.");
@@ -3536,7 +3704,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             repeatDelayMs,
             iteration: 1,
             restartOnError,
-            hideRunOverlay
+            hideRunOverlay,
+            allowSingleApproval
           });
 
           await appendRunTraceLog({
@@ -3554,7 +3723,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               repeatCount,
               repeatDelayMs,
               restartOnError,
-              hideRunOverlay
+              hideRunOverlay,
+              allowSingleApproval
             }
           });
 
@@ -3648,7 +3818,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case "SAVE_MACRO": {
-          const result = await saveMacro(message.name, message.steps);
+          const result = await saveMacro(message.name, message.steps, {
+            allowSingleApproval: !!message.allowSingleApproval
+          });
 
           sendResponse({
             ok: true,

@@ -833,7 +833,7 @@ async function startFixtureServer() {
                 </tr>
                 <tr>
                   <th>마감부서</th>
-                  <td>재무기획팀 전결</td>
+                  <td>팀원 조경환</td>
                 </tr>
               </tbody>
             </table>
@@ -2218,7 +2218,7 @@ test.describe("extension smoke tests", () => {
         const storage = await readStorage(extensionPage);
         return storage.macroRunState?.lastMessage || "";
       })
-      .toContain("전결문서 체크 없이 마감부서 줄에서 '전결'이 감지되어 실행을 중단했습니다.");
+      .toContain("전결문서 체크 없이 마감부서에 '조경환' 단독 결재가 감지되어 실행을 중단했습니다.");
 
     await expect(runPage.locator("#result")).toHaveText("");
   });

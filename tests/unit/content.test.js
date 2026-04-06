@@ -471,32 +471,38 @@ test("querySelectorDeep prefers iframe descendants over same-selector hidden inp
   assert.equal(harness.hooks.querySelectorDeep("#userPassword", topWindow), childTarget);
 });
 
-test("findApprovalGuardMatch blocks when the closing department row contains 전결", () => {
+test("findApprovalGuardMatch blocks when the closing department row only contains 조경환 as a name", () => {
   const harness = loadContentHarness();
-  const row = createApprovalGuardElement("TR", "마감부서 재무기획팀 전결");
+  const row = createApprovalGuardElement("TR", "마감부서 팀원 조경환");
   const topWindow = createApprovalGuardWindow({
     containers: [row]
   });
 
   assert.deepEqual(normalize(harness.hooks.findApprovalGuardMatch(topWindow)), {
     blocked: true,
-    matchedText: "마감부서 재무기획팀 전결"
+    matchedText: "마감부서 팀원 조경환"
   });
 });
 
-test("findApprovalGuardMatch ignores unrelated 전결 text outside the closing department block", () => {
+test("findApprovalGuardMatch ignores the closing department block when another name is present", () => {
+  const harness = loadContentHarness();
+  const row = createApprovalGuardElement("TR", "마감부서 팀원 조경환 팀장 서동진");
+  const topWindow = createApprovalGuardWindow({
+    containers: [row]
+  });
+
+  assert.deepEqual(normalize(harness.hooks.findApprovalGuardMatch(topWindow)), {
+    blocked: false,
+    matchedText: ""
+  });
+});
+
+test("findApprovalGuardMatch ignores unrelated 조경환 text outside the closing department block", () => {
   const harness = loadContentHarness();
   const row = createApprovalGuardElement("TR", "마감부서 재무기획팀");
-  const stray = createApprovalGuardElement("DIV", "전결 처리 안내");
-  const root = createApprovalGuardElement(
-    "DIV",
-    `마감부서 재무기획팀 ${"안내 ".repeat(90)}전결 처리 안내`,
-    {
-      childElementCount: 12
-    }
-  );
+  const stray = createApprovalGuardElement("DIV", "결재자 조경환 안내");
   const topWindow = createApprovalGuardWindow({
-    containers: [root, row, stray]
+    containers: [row, stray]
   });
 
   assert.deepEqual(normalize(harness.hooks.findApprovalGuardMatch(topWindow)), {
@@ -507,7 +513,7 @@ test("findApprovalGuardMatch ignores unrelated 전결 text outside the closing d
 
 test("findApprovalGuardMatch scans same-origin child frames", () => {
   const harness = loadContentHarness();
-  const childRow = createApprovalGuardElement("TR", "마감부서 재무기획팀 전결");
+  const childRow = createApprovalGuardElement("TR", "마감부서 팀원 조경환");
   const childWindow = createApprovalGuardWindow({
     containers: [childRow]
   });

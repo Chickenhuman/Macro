@@ -21,6 +21,15 @@
   const RECORD_STATE_EVENT_TYPE = "__EASY_WEB_MACRO_RECORD_STATE__";
   const FRAME_READY_EVENT_TYPE = "__EASY_WEB_MACRO_FRAME_READY__";
   const APPROVAL_GUARD_CONTAINER_SELECTOR = "tr, [role='row'], li, section, article, div";
+  const SINGLE_APPROVAL_GUARD_NAME = "조경환";
+  const APPROVAL_GUARD_NON_NAME_TOKENS = new Set([
+    "마감부서",
+    "작성부서",
+    "전표확인",
+    "문서번호",
+    "작성일자",
+    "수신처"
+  ]);
 
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1049,6 +1058,44 @@
     return normalizeText(el?.innerText || el?.textContent || "");
   }
 
+  function extractApprovalGuardNameTokens(text) {
+    const tokens = normalizeText(text)
+      .split(/[^가-힣]+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    const names = [];
+    const seen = new Set();
+
+    for (const token of tokens) {
+      if (token.length < 3 || token.length > 4) {
+        continue;
+      }
+
+      if (APPROVAL_GUARD_NON_NAME_TOKENS.has(token)) {
+        continue;
+      }
+
+      if (
+        token.endsWith("부서") ||
+        token.endsWith("확인") ||
+        token.endsWith("번호") ||
+        token.endsWith("일자")
+      ) {
+        continue;
+      }
+
+      if (seen.has(token)) {
+        continue;
+      }
+
+      seen.add(token);
+      names.push(token);
+    }
+
+    return names;
+  }
+
   function getApprovalGuardContainerWeight(el, text) {
     const tagName = String(el?.tagName || "").toLowerCase();
     const role = String(el?.getAttribute?.("role") || "").toLowerCase();
@@ -1094,7 +1141,10 @@
       .filter((entry) => shouldInspectApprovalGuardContainer(entry.el, entry.text))
       .sort((a, b) => getApprovalGuardContainerWeight(a.el, a.text) - getApprovalGuardContainerWeight(b.el, b.text));
 
-    const matched = matches.find((entry) => entry.text.includes("전결"));
+    const matched = matches.find((entry) => {
+      const names = extractApprovalGuardNameTokens(entry.text);
+      return names.length === 1 && names[0] === SINGLE_APPROVAL_GUARD_NAME;
+    });
     if (!matched) {
       return {
         blocked: false,

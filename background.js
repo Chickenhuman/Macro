@@ -14,7 +14,7 @@ const POPUP_WAIT_ALARM = "macroPopupWaitTimeout";
 
 const DANGEROUS_APPROVAL_CLICK_KEYWORDS = ["결재", "반영", "approve", "set_apprv"];
 const SINGLE_APPROVAL_BLOCK_MESSAGE =
-  "전결문서 체크 없이 마감부서 줄에서 '전결'이 감지되어 실행을 중단했습니다.";
+  "전결문서 체크 없이 마감부서에 '조경환' 단독 결재가 감지되어 실행을 중단했습니다.";
 
 const DEFAULT_RECORDING_STATE = {
   enabled: false,

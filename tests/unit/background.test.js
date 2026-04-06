@@ -1370,7 +1370,7 @@ test("continueMacroRun blocks dangerous approval clicks when single approval is 
       return {
         ok: true,
         blocked: true,
-        matchedText: "마감부서 재무기획팀 전결"
+        matchedText: "마감부서 팀원 조경환"
       };
     }
 
@@ -1420,7 +1420,7 @@ test("continueMacroRun blocks dangerous approval clicks when single approval is 
   assert.equal(harness.storage.macroRunState.running, false);
   assert.equal(
     harness.storage.macroRunState.lastMessage,
-    "오류: 전결문서 체크 없이 마감부서 줄에서 '전결'이 감지되어 실행을 중단했습니다."
+    "오류: 전결문서 체크 없이 마감부서에 '조경환' 단독 결재가 감지되어 실행을 중단했습니다."
   );
   assert.equal(
     harness.storage.macroRunTraceLogs.some((entry) => entry.eventType === "approval-guard-blocked"),
@@ -1437,7 +1437,7 @@ test("continueMacroRun allows dangerous approval clicks when single approval is 
       return {
         ok: true,
         blocked: true,
-        matchedText: "마감부서 재무기획팀 전결"
+        matchedText: "마감부서 팀원 조경환"
       };
     }
 
@@ -1499,7 +1499,7 @@ test("continueMacroRun skips the approval guard for non-dangerous clicks", async
       return {
         ok: true,
         blocked: true,
-        matchedText: "마감부서 재무기획팀 전결"
+        matchedText: "마감부서 팀원 조경환"
       };
     }
 

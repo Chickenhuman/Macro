@@ -180,17 +180,29 @@ async function dispatchContentRuntimeMessage(listener, message, sender = {}) {
 }
 
 function createApprovalGuardElement(tagName, text, options = {}) {
+  const rect = {
+    left: options.left ?? 0,
+    top: options.top ?? 0,
+    width: options.width ?? 120,
+    height: options.height ?? 24
+  };
+
   return {
     nodeType: 1,
     tagName,
     ownerDocument: null,
+    __table: null,
     innerText: text,
     textContent: text,
     childElementCount: options.childElementCount ?? 1,
     getBoundingClientRect() {
       return {
-        width: 120,
-        height: 24
+        left: rect.left,
+        top: rect.top,
+        right: rect.left + rect.width,
+        bottom: rect.top + rect.height,
+        width: rect.width,
+        height: rect.height
       };
     },
     getAttribute(name) {
@@ -199,11 +211,36 @@ function createApprovalGuardElement(tagName, text, options = {}) {
       }
 
       return "";
+    },
+    closest(selector) {
+      if (selector === "table") {
+        return this.__table;
+      }
+
+      return null;
     }
   };
 }
 
-function createApprovalGuardWindow({ containers = [], frames = [] } = {}) {
+function createApprovalGuardTable(cells = []) {
+  const table = {
+    querySelectorAll(selector) {
+      if (selector === "td, th") {
+        return cells;
+      }
+
+      return [];
+    }
+  };
+
+  cells.forEach((cell) => {
+    cell.__table = table;
+  });
+
+  return table;
+}
+
+function createApprovalGuardWindow({ containers = [], cells = [], frames = [] } = {}) {
   const document = {
     activeElement: null,
     defaultView: null,
@@ -217,6 +254,10 @@ function createApprovalGuardWindow({ containers = [], frames = [] } = {}) {
 
       if (selector === "tr, [role='row'], li, section, article, div") {
         return containers;
+      }
+
+      if (selector === "td, th") {
+        return cells;
       }
 
       return [];
@@ -236,6 +277,9 @@ function createApprovalGuardWindow({ containers = [], frames = [] } = {}) {
 
   document.defaultView = window;
   containers.forEach((entry) => {
+    entry.ownerDocument = document;
+  });
+  cells.forEach((entry) => {
     entry.ownerDocument = document;
   });
   frames.forEach((entry) => {
@@ -471,24 +515,71 @@ test("querySelectorDeep prefers iframe descendants over same-selector hidden inp
   assert.equal(harness.hooks.querySelectorDeep("#userPassword", topWindow), childTarget);
 });
 
-test("findApprovalGuardMatch blocks when the closing department row only contains 조경환 as a name", () => {
+test("findApprovalGuardMatch blocks when a vertically rendered closing department cell leads to only 조경환", () => {
   const harness = loadContentHarness();
-  const row = createApprovalGuardElement("TR", "마감부서 팀원 조경환");
+  const labelCell = createApprovalGuardElement("TD", "마\n감\n부\n서", {
+    left: 100,
+    top: 100,
+    width: 20,
+    height: 100
+  });
+  const roleCell = createApprovalGuardElement("TD", "팀원", {
+    left: 121,
+    top: 100,
+    width: 60,
+    height: 40
+  });
+  const nameCell = createApprovalGuardElement("TD", "조경환", {
+    left: 121,
+    top: 160,
+    width: 60,
+    height: 20
+  });
+  createApprovalGuardTable([labelCell, roleCell, nameCell]);
   const topWindow = createApprovalGuardWindow({
-    containers: [row]
+    cells: [labelCell, roleCell, nameCell]
   });
 
-  assert.deepEqual(normalize(harness.hooks.findApprovalGuardMatch(topWindow)), {
-    blocked: true,
-    matchedText: "마감부서 팀원 조경환"
-  });
+  const result = normalize(harness.hooks.findApprovalGuardMatch(topWindow));
+  assert.equal(result.blocked, true);
+  assert.equal(result.matchedText.includes("조경환"), true);
 });
 
 test("findApprovalGuardMatch ignores the closing department block when another name is present", () => {
   const harness = loadContentHarness();
-  const row = createApprovalGuardElement("TR", "마감부서 팀원 조경환 팀장 서동진");
+  const labelCell = createApprovalGuardElement("TD", "마 감 부 서", {
+    left: 100,
+    top: 100,
+    width: 20,
+    height: 100
+  });
+  const firstRoleCell = createApprovalGuardElement("TD", "팀원", {
+    left: 121,
+    top: 100,
+    width: 60,
+    height: 40
+  });
+  const firstNameCell = createApprovalGuardElement("TD", "조경환", {
+    left: 121,
+    top: 160,
+    width: 60,
+    height: 20
+  });
+  const secondRoleCell = createApprovalGuardElement("TD", "팀장", {
+    left: 182,
+    top: 100,
+    width: 60,
+    height: 40
+  });
+  const secondNameCell = createApprovalGuardElement("TD", "서동진", {
+    left: 182,
+    top: 160,
+    width: 60,
+    height: 20
+  });
+  createApprovalGuardTable([labelCell, firstRoleCell, firstNameCell, secondRoleCell, secondNameCell]);
   const topWindow = createApprovalGuardWindow({
-    containers: [row]
+    cells: [labelCell, firstRoleCell, firstNameCell, secondRoleCell, secondNameCell]
   });
 
   assert.deepEqual(normalize(harness.hooks.findApprovalGuardMatch(topWindow)), {
@@ -499,10 +590,27 @@ test("findApprovalGuardMatch ignores the closing department block when another n
 
 test("findApprovalGuardMatch ignores unrelated 조경환 text outside the closing department block", () => {
   const harness = loadContentHarness();
-  const row = createApprovalGuardElement("TR", "마감부서 재무기획팀");
-  const stray = createApprovalGuardElement("DIV", "결재자 조경환 안내");
+  const labelCell = createApprovalGuardElement("TD", "마 감 부 서", {
+    left: 100,
+    top: 100,
+    width: 20,
+    height: 100
+  });
+  const roleCell = createApprovalGuardElement("TD", "팀원", {
+    left: 121,
+    top: 100,
+    width: 60,
+    height: 40
+  });
+  const stray = createApprovalGuardElement("TD", "조경환", {
+    left: 121,
+    top: 240,
+    width: 60,
+    height: 20
+  });
+  createApprovalGuardTable([labelCell, roleCell, stray]);
   const topWindow = createApprovalGuardWindow({
-    containers: [row, stray]
+    cells: [labelCell, roleCell, stray]
   });
 
   assert.deepEqual(normalize(harness.hooks.findApprovalGuardMatch(topWindow)), {
@@ -513,9 +621,27 @@ test("findApprovalGuardMatch ignores unrelated 조경환 text outside the closin
 
 test("findApprovalGuardMatch scans same-origin child frames", () => {
   const harness = loadContentHarness();
-  const childRow = createApprovalGuardElement("TR", "마감부서 팀원 조경환");
+  const labelCell = createApprovalGuardElement("TD", "마\n감\n부\n서", {
+    left: 100,
+    top: 100,
+    width: 20,
+    height: 100
+  });
+  const roleCell = createApprovalGuardElement("TD", "팀원", {
+    left: 121,
+    top: 100,
+    width: 60,
+    height: 40
+  });
+  const nameCell = createApprovalGuardElement("TD", "조경환", {
+    left: 121,
+    top: 160,
+    width: 60,
+    height: 20
+  });
+  createApprovalGuardTable([labelCell, roleCell, nameCell]);
   const childWindow = createApprovalGuardWindow({
-    containers: [childRow]
+    cells: [labelCell, roleCell, nameCell]
   });
   const frame = {
     nodeType: 1,

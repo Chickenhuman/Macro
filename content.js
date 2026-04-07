@@ -1058,6 +1058,14 @@
     return normalizeText(el?.innerText || el?.textContent || "");
   }
 
+  function compactApprovalGuardText(value) {
+    return String(value ?? "").replace(/\s+/g, "");
+  }
+
+  function isApprovalGuardLabelText(text) {
+    return compactApprovalGuardText(text) === "마감부서";
+  }
+
   function extractApprovalGuardNameTokens(text) {
     const tokens = normalizeText(text)
       .split(/[^가-힣]+/)
@@ -1113,7 +1121,7 @@
   }
 
   function shouldInspectApprovalGuardContainer(el, text) {
-    if (!text || !text.includes("마감부서")) {
+    if (!text || !isApprovalGuardLabelText(text) && !compactApprovalGuardText(text).includes("마감부서")) {
       return false;
     }
 
@@ -1131,7 +1139,101 @@
     return true;
   }
 
+  function getApprovalGuardRect(el) {
+    if (!el || typeof el.getBoundingClientRect !== "function") {
+      return null;
+    }
+
+    const rect = el.getBoundingClientRect();
+    if (!rect) {
+      return null;
+    }
+
+    const left = Number.isFinite(rect.left) ? rect.left : 0;
+    const top = Number.isFinite(rect.top) ? rect.top : 0;
+    const right = Number.isFinite(rect.right)
+      ? rect.right
+      : left + (Number.isFinite(rect.width) ? rect.width : 0);
+    const bottom = Number.isFinite(rect.bottom)
+      ? rect.bottom
+      : top + (Number.isFinite(rect.height) ? rect.height : 0);
+
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top)
+    };
+  }
+
+  function collectApprovalGuardTableRegionText(labelCell) {
+    if (!isElementNode(labelCell)) {
+      return "";
+    }
+
+    const table = typeof labelCell.closest === "function" ? labelCell.closest("table") : null;
+    if (!table?.querySelectorAll) {
+      return "";
+    }
+
+    const labelRect = getApprovalGuardRect(labelCell);
+    if (!labelRect || labelRect.height <= 0) {
+      return "";
+    }
+
+    const collectedTexts = [getApprovalGuardText(labelCell)];
+
+    for (const cell of table.querySelectorAll("td, th")) {
+      if (!isElementNode(cell) || cell === labelCell || !isVisibleForApprovalGuard(cell)) {
+        continue;
+      }
+
+      const cellRect = getApprovalGuardRect(cell);
+      if (!cellRect || cellRect.height <= 0) {
+        continue;
+      }
+
+      const overlapsVertically = cellRect.bottom > labelRect.top + 1 && cellRect.top < labelRect.bottom - 1;
+      const isToRightOfLabel = cellRect.left >= labelRect.right - 2;
+
+      if (!overlapsVertically || !isToRightOfLabel) {
+        continue;
+      }
+
+      const text = getApprovalGuardText(cell);
+      if (!text) {
+        continue;
+      }
+
+      collectedTexts.push(text);
+    }
+
+    return normalizeText(collectedTexts.join(" "));
+  }
+
   function findApprovalGuardMatch(rootWindow = window) {
+    const labelCells = collectQuerySelectorAllDeep("td, th", rootWindow)
+      .filter((el) => isVisibleForApprovalGuard(el))
+      .filter((el) => isApprovalGuardLabelText(getApprovalGuardText(el)));
+
+    const tableMatched = labelCells
+      .map((cell) => ({
+        text: collectApprovalGuardTableRegionText(cell)
+      }))
+      .find((entry) => {
+        const names = extractApprovalGuardNameTokens(entry.text);
+        return names.length === 1 && names[0] === SINGLE_APPROVAL_GUARD_NAME;
+      });
+
+    if (tableMatched) {
+      return {
+        blocked: true,
+        matchedText: tableMatched.text.slice(0, 200)
+      };
+    }
+
     const matches = collectQuerySelectorAllDeep(APPROVAL_GUARD_CONTAINER_SELECTOR, rootWindow)
       .filter((el) => isVisibleForApprovalGuard(el))
       .map((el) => ({

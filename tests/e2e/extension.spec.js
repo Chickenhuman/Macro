@@ -829,11 +829,16 @@ async function startFixtureServer() {
               <tbody>
                 <tr>
                   <th>작성부서</th>
-                  <td>관리팀</td>
+                  <td>재무기획팀</td>
+                  <td rowspan="2">마<br>감<br>부<br>서</td>
+                  <td>팀원</td>
+                  <td></td>
                 </tr>
                 <tr>
-                  <th>마감부서</th>
-                  <td>팀원 조경환</td>
+                  <th>작성자</th>
+                  <td>황영롱</td>
+                  <td class="brbn textC">조경환</td>
+                  <td></td>
                 </tr>
               </tbody>
             </table>

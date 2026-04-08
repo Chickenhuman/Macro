@@ -907,6 +907,84 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/voucher-review-guard-blocked.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Voucher Review Guard Blocked",
+          `
+            <h1>회 계 전 표</h1>
+            <table border="1" cellpadding="6" cellspacing="0">
+              <tbody>
+                <tr>
+                  <td>문서번호</td>
+                  <td>연구지원팀-542</td>
+                  <td rowspan="2">전<br>표<br>확<br>인</td>
+                  <td></td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td>작성부서</td>
+                  <td>연구지원팀</td>
+                  <td></td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+              <input id="approvalLineBtn" type="button" value="결재라인지정" onclick="openApprovalLine();" />
+            </div>
+            <div id="result"></div>
+          `,
+          `
+            window.openApprovalLine = function() {
+              document.querySelector("#result").textContent = "approval-line-opened";
+            };
+          `
+        )
+      );
+      return;
+    }
+
+    if (route === "/voucher-review-guard-allowed.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Voucher Review Guard Allowed",
+          `
+            <h1>회 계 전 표</h1>
+            <table border="1" cellpadding="6" cellspacing="0">
+              <tbody>
+                <tr>
+                  <td>문서번호</td>
+                  <td>재무기획팀-130</td>
+                  <td rowspan="2">전<br>표<br>확<br>인</td>
+                  <td></td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td>작성부서</td>
+                  <td>재무기획팀</td>
+                  <td></td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+              <input id="approvalLineBtn" type="button" value="결재라인지정" onclick="openApprovalLine();" />
+            </div>
+            <div id="result"></div>
+          `,
+          `
+            window.openApprovalLine = function() {
+              document.querySelector("#result").textContent = "approval-line-opened";
+            };
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/synthetic-mousedown-sensitive.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -2278,6 +2356,62 @@ test.describe("extension smoke tests", () => {
   test("allows archive receipt flow to continue when the heading is accounting voucher", async () => {
     const runPage = await bundle.context.newPage();
     await runPage.goto(`${server.baseUrl}/archive-guard-allowed.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps: [
+        {
+          type: "click",
+          selector: "#approvalLineBtn",
+          label: "결재라인지정"
+        }
+      ]
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect(runPage.locator("#result")).toHaveText("approval-line-opened");
+  });
+
+  test("blocks archive receipt flow when a non-finance department has no voucher reviewer", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/voucher-review-guard-blocked.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps: [
+        {
+          type: "click",
+          selector: "#approvalLineBtn",
+          label: "결재라인지정"
+        }
+      ]
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return storage.macroRunState?.lastMessage || "";
+      })
+      .toContain("작성부서가 '재무기획팀'이 아닌데 전표확인 담당자가 없어 검토되지 않은 문서로 판단되어 매크로를 중단했습니다.");
+
+    await expect(runPage.locator("#result")).toHaveText("");
+    await expect(extensionPage.locator("#topWarningBox")).toContainText(
+      "작성부서가 '재무기획팀'이 아닌데 전표확인 담당자가 없어 검토되지 않은 문서로 판단되어 매크로를 중단했습니다."
+    );
+  });
+
+  test("allows archive receipt flow when finance department has no voucher reviewer", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/voucher-review-guard-allowed.html`);
 
     const runTabId = await findTabId(extensionPage, runPage.url());
     expect(runTabId).toBeTruthy();

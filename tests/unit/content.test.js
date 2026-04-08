@@ -551,6 +551,114 @@ test("findArchiveReceiptGuardMatch blocks a non-accounting document heading", ()
   });
 });
 
+test("findVoucherReviewGuardMatch blocks when a non-finance department has no voucher reviewer", () => {
+  const harness = loadContentHarness();
+  const departmentLabelCell = createApprovalGuardElement("TD", "작 성 부 서", {
+    left: 0,
+    top: 120,
+    width: 80,
+    height: 24
+  });
+  const departmentValueCell = createApprovalGuardElement("TD", "연구지원팀", {
+    left: 81,
+    top: 120,
+    width: 120,
+    height: 24
+  });
+  const reviewLabelCell = createApprovalGuardElement("TD", "전\n표\n확\n인", {
+    left: 220,
+    top: 40,
+    width: 20,
+    height: 120
+  });
+  createApprovalGuardTable([departmentLabelCell, departmentValueCell, reviewLabelCell]);
+  const topWindow = createApprovalGuardWindow({
+    cells: [departmentLabelCell, departmentValueCell, reviewLabelCell]
+  });
+
+  assert.deepEqual(normalize(harness.hooks.findVoucherReviewGuardMatch(topWindow)), {
+    blocked: true,
+    department: "연구지원팀",
+    normalizedDepartment: "연구지원팀",
+    reviewText: "",
+    reviewerNames: []
+  });
+});
+
+test("findVoucherReviewGuardMatch allows finance department documents without voucher reviewer", () => {
+  const harness = loadContentHarness();
+  const departmentLabelCell = createApprovalGuardElement("TD", "작성부서", {
+    left: 0,
+    top: 120,
+    width: 80,
+    height: 24
+  });
+  const departmentValueCell = createApprovalGuardElement("TD", "재무기획팀", {
+    left: 81,
+    top: 120,
+    width: 120,
+    height: 24
+  });
+  const reviewLabelCell = createApprovalGuardElement("TD", "전 표 확 인", {
+    left: 220,
+    top: 40,
+    width: 20,
+    height: 120
+  });
+  createApprovalGuardTable([departmentLabelCell, departmentValueCell, reviewLabelCell]);
+  const topWindow = createApprovalGuardWindow({
+    cells: [departmentLabelCell, departmentValueCell, reviewLabelCell]
+  });
+
+  assert.deepEqual(normalize(harness.hooks.findVoucherReviewGuardMatch(topWindow)), {
+    blocked: false,
+    department: "재무기획팀",
+    normalizedDepartment: "재무기획팀",
+    reviewText: "",
+    reviewerNames: []
+  });
+});
+
+test("findVoucherReviewGuardMatch allows non-finance department documents when voucher reviewer exists", () => {
+  const harness = loadContentHarness();
+  const departmentLabelCell = createApprovalGuardElement("TD", "작성부서", {
+    left: 0,
+    top: 120,
+    width: 80,
+    height: 24
+  });
+  const departmentValueCell = createApprovalGuardElement("TD", "연구지원팀", {
+    left: 81,
+    top: 120,
+    width: 120,
+    height: 24
+  });
+  const reviewLabelCell = createApprovalGuardElement("TD", "전 표 확 인", {
+    left: 220,
+    top: 40,
+    width: 20,
+    height: 120
+  });
+  const reviewerNameCell = createApprovalGuardElement("TD", "조경환", {
+    left: 241,
+    top: 90,
+    width: 60,
+    height: 20
+  });
+  createApprovalGuardTable([departmentLabelCell, departmentValueCell, reviewLabelCell, reviewerNameCell]);
+  const topWindow = createApprovalGuardWindow({
+    cells: [departmentLabelCell, departmentValueCell, reviewLabelCell, reviewerNameCell]
+  });
+
+  assert.deepEqual(normalize(harness.hooks.findVoucherReviewGuardMatch(topWindow)), {
+    blocked: false,
+    department: "연구지원팀",
+    normalizedDepartment: "연구지원팀",
+    reviewText: "조경환",
+    reviewerNames: ["조경환"]
+  });
+});
+
 test("findApprovalGuardMatch blocks when a vertically rendered closing department cell leads to only 조경환", () => {
   const harness = loadContentHarness();
   const labelCell = createApprovalGuardElement("TD", "마\n감\n부\n서", {

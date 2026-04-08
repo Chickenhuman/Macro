@@ -23,6 +23,9 @@
   const ARCHIVE_RECEIPT_TITLE_SELECTOR = "h1, h2, h3, [role='heading']";
   const ARCHIVE_RECEIPT_ALLOWED_TITLE = "회계전표";
   const APPROVAL_GUARD_CONTAINER_SELECTOR = "tr, [role='row'], li, section, article, div";
+  const VOUCHER_REVIEW_FINANCE_DEPARTMENT = "재무기획팀";
+  const VOUCHER_REVIEW_DEPARTMENT_LABEL = "작성부서";
+  const VOUCHER_REVIEW_CONFIRM_LABEL = "전표확인";
   const SINGLE_APPROVAL_GUARD_NAME = "조경환";
   const APPROVAL_GUARD_NON_NAME_TOKENS = new Set([
     "마감부서",
@@ -30,7 +33,8 @@
     "전표확인",
     "문서번호",
     "작성일자",
-    "수신처"
+    "수신처",
+    "본부장"
   ]);
 
   function delay(ms) {
@@ -1064,8 +1068,12 @@
     return String(value ?? "").replace(/\s+/g, "");
   }
 
+  function hasCompactGuardText(text, expected) {
+    return compactGuardText(text) === compactGuardText(expected);
+  }
+
   function isApprovalGuardLabelText(text) {
-    return compactGuardText(text) === "마감부서";
+    return hasCompactGuardText(text, "마감부서");
   }
 
   function getArchiveReceiptTitleWeight(el, text) {
@@ -1149,6 +1157,12 @@
     return names;
   }
 
+  function findApprovalGuardTableLabelCells(rootWindow, labelText) {
+    return collectQuerySelectorAllDeep("td, th", rootWindow)
+      .filter((el) => isVisibleForApprovalGuard(el))
+      .filter((el) => hasCompactGuardText(getApprovalGuardText(el), labelText));
+  }
+
   function getApprovalGuardContainerWeight(el, text) {
     const tagName = String(el?.tagName || "").toLowerCase();
     const role = String(el?.getAttribute?.("role") || "").toLowerCase();
@@ -1213,22 +1227,22 @@
     };
   }
 
-  function collectApprovalGuardTableRegionText(labelCell) {
+  function collectApprovalGuardTableRegionTexts(labelCell) {
     if (!isElementNode(labelCell)) {
-      return "";
+      return [];
     }
 
     const table = typeof labelCell.closest === "function" ? labelCell.closest("table") : null;
     if (!table?.querySelectorAll) {
-      return "";
+      return [];
     }
 
     const labelRect = getApprovalGuardRect(labelCell);
     if (!labelRect || labelRect.height <= 0) {
-      return "";
+      return [];
     }
 
-    const collectedTexts = [getApprovalGuardText(labelCell)];
+    const collectedTexts = [];
 
     for (const cell of table.querySelectorAll("td, th")) {
       if (!isElementNode(cell) || cell === labelCell || !isVisibleForApprovalGuard(cell)) {
@@ -1255,13 +1269,129 @@
       collectedTexts.push(text);
     }
 
+    return collectedTexts;
+  }
+
+  function collectClosestApprovalGuardTableRegionText(labelCell) {
+    if (!isElementNode(labelCell)) {
+      return "";
+    }
+
+    const table = typeof labelCell.closest === "function" ? labelCell.closest("table") : null;
+    if (!table?.querySelectorAll) {
+      return "";
+    }
+
+    const labelRect = getApprovalGuardRect(labelCell);
+    if (!labelRect || labelRect.height <= 0) {
+      return "";
+    }
+
+    let closestLeft = Number.POSITIVE_INFINITY;
+    const collectedTexts = [];
+
+    for (const cell of table.querySelectorAll("td, th")) {
+      if (!isElementNode(cell) || cell === labelCell || !isVisibleForApprovalGuard(cell)) {
+        continue;
+      }
+
+      const cellRect = getApprovalGuardRect(cell);
+      if (!cellRect || cellRect.height <= 0) {
+        continue;
+      }
+
+      const overlapsVertically = cellRect.bottom > labelRect.top + 1 && cellRect.top < labelRect.bottom - 1;
+      const isToRightOfLabel = cellRect.left >= labelRect.right - 2;
+
+      if (!overlapsVertically || !isToRightOfLabel) {
+        continue;
+      }
+
+      const text = getApprovalGuardText(cell);
+      if (!text) {
+        continue;
+      }
+
+      if (cellRect.left < closestLeft - 2) {
+        closestLeft = cellRect.left;
+        collectedTexts.length = 0;
+        collectedTexts.push(text);
+        continue;
+      }
+
+      if (Math.abs(cellRect.left - closestLeft) <= 2) {
+        collectedTexts.push(text);
+      }
+    }
+
     return normalizeText(collectedTexts.join(" "));
   }
 
+  function collectApprovalGuardTableRegionText(labelCell, options = {}) {
+    if (!isElementNode(labelCell)) {
+      return "";
+    }
+
+    const includeLabel = options.includeLabel !== false;
+    const collectedTexts = includeLabel
+      ? [getApprovalGuardText(labelCell), ...collectApprovalGuardTableRegionTexts(labelCell)]
+      : collectApprovalGuardTableRegionTexts(labelCell);
+
+    return normalizeText(collectedTexts.join(" "));
+  }
+
+  function findVoucherReviewGuardMatch(rootWindow = window) {
+    const departmentCell = findApprovalGuardTableLabelCells(rootWindow, VOUCHER_REVIEW_DEPARTMENT_LABEL)[0] || null;
+    const reviewCell = findApprovalGuardTableLabelCells(rootWindow, VOUCHER_REVIEW_CONFIRM_LABEL)[0] || null;
+
+    const departmentText = collectClosestApprovalGuardTableRegionText(departmentCell);
+    const reviewText = collectApprovalGuardTableRegionText(reviewCell, {
+      includeLabel: false
+    });
+    const normalizedDepartment = compactGuardText(departmentText);
+    const reviewerNames = extractApprovalGuardNameTokens(reviewText);
+
+    if (!departmentCell || !reviewCell) {
+      return {
+        blocked: false,
+        department: departmentText.slice(0, 200),
+        normalizedDepartment: normalizedDepartment.slice(0, 200),
+        reviewText: reviewText.slice(0, 200),
+        reviewerNames
+      };
+    }
+
+    if (normalizedDepartment === VOUCHER_REVIEW_FINANCE_DEPARTMENT) {
+      return {
+        blocked: false,
+        department: departmentText.slice(0, 200),
+        normalizedDepartment: normalizedDepartment.slice(0, 200),
+        reviewText: reviewText.slice(0, 200),
+        reviewerNames
+      };
+    }
+
+    if (reviewerNames.length > 0) {
+      return {
+        blocked: false,
+        department: departmentText.slice(0, 200),
+        normalizedDepartment: normalizedDepartment.slice(0, 200),
+        reviewText: reviewText.slice(0, 200),
+        reviewerNames
+      };
+    }
+
+    return {
+      blocked: true,
+      department: departmentText.slice(0, 200),
+      normalizedDepartment: normalizedDepartment.slice(0, 200),
+      reviewText: reviewText.slice(0, 200),
+      reviewerNames
+    };
+  }
+
   function findApprovalGuardMatch(rootWindow = window) {
-    const labelCells = collectQuerySelectorAllDeep("td, th", rootWindow)
-      .filter((el) => isVisibleForApprovalGuard(el))
-      .filter((el) => isApprovalGuardLabelText(getApprovalGuardText(el)));
+    const labelCells = findApprovalGuardTableLabelCells(rootWindow, "마감부서");
 
     const tableMatched = labelCells
       .map((cell) => ({
@@ -3278,6 +3408,14 @@
           return;
         }
 
+        if (message?.type === "CHECK_VOUCHER_REVIEW_GUARD") {
+          sendResponse({
+            ok: true,
+            ...findVoucherReviewGuardMatch()
+          });
+          return;
+        }
+
         if (message?.type === "RUN_SINGLE_STEP") {
           const result = await runSingleStep(message.step, message.index || 0, {
             hideRunOverlay: !!message.hideRunOverlay,
@@ -3315,6 +3453,7 @@
       querySelectorDeep,
       collectQuerySelectorAllDeep,
       findArchiveReceiptGuardMatch,
+      findVoucherReviewGuardMatch,
       findApprovalGuardMatch
     });
   }

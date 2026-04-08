@@ -12,6 +12,9 @@ const RUN_TRACE_LOGS_KEY = "macroRunTraceLogs";
 const WORKSPACE_SESSION_KEY = "macroWorkspaceSessionInitialized";
 const POPUP_WAIT_ALARM = "macroPopupWaitTimeout";
 
+const ARCHIVE_RECEIPT_GUARD_CLICK_KEYWORDS = ["결재라인지정"];
+const ARCHIVE_RECEIPT_BLOCK_MESSAGE =
+  "문서 제목이 '회계전표'로 확인되지 않아 결재라인지정 전에 매크로를 중단했습니다.";
 const DANGEROUS_APPROVAL_CLICK_KEYWORDS = ["결재", "반영", "approve", "set_apprv"];
 const SINGLE_APPROVAL_BLOCK_MESSAGE =
   "전결문서 체크 없이 마감부서에 '조경환' 단독 결재가 감지되어 실행을 중단했습니다.";
@@ -1888,6 +1891,66 @@ function buildApprovalRiskText(step) {
     .toLowerCase();
 }
 
+function isArchiveReceiptGuardStep(step) {
+  if (!step || step.type !== "click") {
+    return false;
+  }
+
+  const stepText = buildApprovalRiskText(step);
+  return ARCHIVE_RECEIPT_GUARD_CLICK_KEYWORDS.some((keyword) =>
+    stepText.includes(String(keyword).toLowerCase())
+  );
+}
+
+async function enforceArchiveReceiptGuard(runState, step, tab) {
+  if (!isArchiveReceiptGuardStep(step)) {
+    return {
+      checked: false,
+      blocked: false
+    };
+  }
+
+  const response = await sendTabMessageToFrame(
+    runState.currentTabId,
+    {
+      type: "CHECK_ARCHIVE_RECEIPT_GUARD"
+    },
+    0
+  );
+
+  if (!response?.ok) {
+    throw new Error(response?.message || "편철접수 문서 검증 실패");
+  }
+
+  if (!response.blocked) {
+    return {
+      checked: true,
+      blocked: false
+    };
+  }
+
+  await appendRunTraceLog({
+    source: "run:background",
+    eventType: "archive-receipt-guard-blocked",
+    tabId: runState.currentTabId,
+    stepIndex: runState.stepIndex,
+    stepType: step.type,
+    message: ARCHIVE_RECEIPT_BLOCK_MESSAGE,
+    step,
+    detail: {
+      currentTab: summarizeTabForTrace(tab),
+      detectedTitle: String(response.detectedTitle || ""),
+      normalizedTitle: String(response.normalizedTitle || "")
+    }
+  });
+
+  await failRun(ARCHIVE_RECEIPT_BLOCK_MESSAGE);
+  return {
+    checked: true,
+    blocked: true
+  };
+}
+
 function isApprovalRiskStep(step) {
   if (!step || step.type !== "click") {
     return false;
@@ -2983,6 +3046,11 @@ async function continueMacroRunInternal(passedState) {
       tab = alignedContext.tab;
 
       await ensureContentReady(runState.currentTabId);
+
+      const archiveReceiptGuard = await enforceArchiveReceiptGuard(runState, step, tab);
+      if (archiveReceiptGuard.blocked) {
+        return;
+      }
 
       const approvalGuard = await enforceSingleApprovalGuard(runState, step, tab);
       if (approvalGuard.blocked) {

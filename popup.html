@@ -29,6 +29,20 @@
       margin-bottom: 12px;
     }
 
+    #topWarningBox {
+      display: block;
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #f0c7c3;
+      background: #fff3f2;
+      color: #b42318;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
     .panel {
       background: #fff;
       border: 1px solid #e4e4e4;
@@ -432,6 +446,7 @@
     기록 시작을 누른 뒤 페이지에서 직접 클릭하거나 값을 바꾸면 자동으로 step이 쌓입니다.<br>
     현재 탭에서 새 창이 열리면 그 창도 자동 기록/실행 대상으로 연결됩니다.
   </div>
+  <div id="topWarningBox" hidden></div>
 
   <details class="panel panel-section" data-panel-key="savedMacros" open>
     <summary class="panel-summary">

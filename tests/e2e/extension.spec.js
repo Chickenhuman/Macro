@@ -702,6 +702,7 @@ async function startFixtureServer() {
                 cursor: pointer;
               }
             </style>
+            <h1>회 계 전 표</h1>
             <div class="psh_btnbox" id="buttonToolbar">
               <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
                 <input class="psh_btn" type="button" value="열람자확인" />
@@ -856,6 +857,50 @@ async function startFixtureServer() {
             document.querySelector("#previewBtn").addEventListener("click", () => {
               document.querySelector("#result").textContent = "previewed";
             });
+          `
+        )
+      );
+      return;
+    }
+
+    if (route === "/archive-guard-allowed.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Archive Guard Allowed",
+          `
+            <h1>회 계 전 표</h1>
+            <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+              <input id="approvalLineBtn" type="button" value="결재라인지정" onclick="openApprovalLine();" />
+            </div>
+            <div id="result"></div>
+          `,
+          `
+            window.openApprovalLine = function() {
+              document.querySelector("#result").textContent = "approval-line-opened";
+            };
+          `
+        )
+      );
+      return;
+    }
+
+    if (route === "/archive-guard-blocked.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Archive Guard Blocked",
+          `
+            <h1>출장 신청서</h1>
+            <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+              <input id="approvalLineBtn" type="button" value="결재라인지정" onclick="openApprovalLine();" />
+            </div>
+            <div id="result"></div>
+          `,
+          `
+            window.openApprovalLine = function() {
+              document.querySelector("#result").textContent = "approval-line-opened";
+            };
           `
         )
       );
@@ -2195,6 +2240,62 @@ test.describe("extension smoke tests", () => {
 
     await runPage.waitForTimeout(300);
     expect(dialogSeen).toBe(false);
+  });
+
+  test("blocks archive receipt flow before approval-line assignment when the heading is not accounting voucher", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/archive-guard-blocked.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps: [
+        {
+          type: "click",
+          selector: "#approvalLineBtn",
+          label: "결재라인지정"
+        }
+      ]
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect
+      .poll(async () => {
+        const storage = await readStorage(extensionPage);
+        return storage.macroRunState?.lastMessage || "";
+      })
+      .toContain("문서 제목이 '회계전표'로 확인되지 않아 결재라인지정 전에 매크로를 중단했습니다.");
+
+    await expect(runPage.locator("#result")).toHaveText("");
+    await expect(extensionPage.locator("#topWarningBox")).toContainText(
+      "문서 제목이 '회계전표'로 확인되지 않아 결재라인지정 전에 매크로를 중단했습니다."
+    );
+  });
+
+  test("allows archive receipt flow to continue when the heading is accounting voucher", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/archive-guard-allowed.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps: [
+        {
+          type: "click",
+          selector: "#approvalLineBtn",
+          label: "결재라인지정"
+        }
+      ]
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect(runPage.locator("#result")).toHaveText("approval-line-opened");
   });
 
   test("blocks dangerous approval clicks when single approval is not allowed", async () => {

@@ -1361,6 +1361,198 @@ test("continueMacroRun repeats the full macro for the requested repeat count", a
   assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료 (2회 반복)");
 });
 
+test("continueMacroRun blocks archive receipt flow before approval-line assignment when the document is not accounting voucher", async () => {
+  const harness = loadBackgroundHarness();
+  let runSingleStepCalls = 0;
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "CHECK_ARCHIVE_RECEIPT_GUARD") {
+      return {
+        ok: true,
+        blocked: true,
+        detectedTitle: "출장 신청서",
+        normalizedTitle: "출장신청서"
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#approvalLineBtn",
+        label: "결재라인지정"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null,
+    allowSingleApproval: false
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(runSingleStepCalls, 0);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(
+    harness.storage.macroRunState.lastMessage,
+    "오류: 문서 제목이 '회계전표'로 확인되지 않아 결재라인지정 전에 매크로를 중단했습니다."
+  );
+  assert.equal(
+    harness.storage.macroRunTraceLogs.some((entry) => entry.eventType === "archive-receipt-guard-blocked"),
+    true
+  );
+});
+
+test("continueMacroRun allows archive receipt flow to continue for accounting voucher headings", async () => {
+  const harness = loadBackgroundHarness();
+  let runSingleStepCalls = 0;
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "CHECK_ARCHIVE_RECEIPT_GUARD") {
+      return {
+        ok: true,
+        blocked: false,
+        detectedTitle: "회 계 전 표",
+        normalizedTitle: "회계전표"
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#approvalLineBtn",
+        label: "결재라인지정"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null,
+    allowSingleApproval: false
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(runSingleStepCalls, 1);
+  assert.equal(harness.storage.macroRunState.running, false);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
+test("continueMacroRun skips archive receipt guard for unrelated clicks", async () => {
+  const harness = loadBackgroundHarness();
+  let archiveChecks = 0;
+  let runSingleStepCalls = 0;
+
+  harness.chrome.tabs.sendMessage = async (tabId, message) => {
+    if (message.type === "CHECK_ARCHIVE_RECEIPT_GUARD") {
+      archiveChecks += 1;
+      return {
+        ok: true,
+        blocked: true,
+        detectedTitle: "출장 신청서",
+        normalizedTitle: "출장신청서"
+      };
+    }
+
+    if (message.type === "RUN_SINGLE_STEP") {
+      runSingleStepCalls += 1;
+    }
+
+    return {
+      ok: true
+    };
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#previewBtn",
+        label: "미리보기"
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "매크로 실행 시작",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null,
+    allowSingleApproval: false
+  };
+
+  await harness.context.continueMacroRun(harness.storage.macroRunState);
+
+  assert.equal(archiveChecks, 0);
+  assert.equal(runSingleStepCalls, 1);
+  assert.equal(harness.storage.macroRunState.lastMessage, "실행 완료");
+});
+
 test("continueMacroRun blocks dangerous approval clicks when single approval is not allowed", async () => {
   const harness = loadBackgroundHarness();
   let runSingleStepCalls = 0;

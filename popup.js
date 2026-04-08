@@ -19,6 +19,7 @@ const loadMacroBtn = document.getElementById("loadMacroBtn");
 const deleteMacroBtn = document.getElementById("deleteMacroBtn");
 const savedMacroMeta = document.getElementById("savedMacroMeta");
 
+const topWarningBox = document.getElementById("topWarningBox");
 const statusBadge = document.getElementById("statusBadge");
 const statusText = document.getElementById("statusText");
 const stepsMeta = document.getElementById("stepsMeta");
@@ -103,6 +104,18 @@ let draggingStepIndex = null;
 
 function setResult(text) {
   resultBox.textContent = text;
+}
+
+function renderTopWarning() {
+  const warningText = normalizeErrorText(currentData.run?.error || "");
+  if (!warningText) {
+    topWarningBox.hidden = true;
+    topWarningBox.textContent = "";
+    return;
+  }
+
+  topWarningBox.hidden = false;
+  topWarningBox.textContent = `경고: ${warningText}`;
 }
 
 function normalizeWorkspaceState(state) {
@@ -1085,6 +1098,7 @@ async function loadData() {
     }
 
     applyPanelState();
+    renderTopWarning();
     renderStatus();
     renderSteps();
     renderSavedMacros();

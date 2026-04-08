@@ -20,6 +20,8 @@
   const RECORDING_KEY = "macroRecordingState";
   const RECORD_STATE_EVENT_TYPE = "__EASY_WEB_MACRO_RECORD_STATE__";
   const FRAME_READY_EVENT_TYPE = "__EASY_WEB_MACRO_FRAME_READY__";
+  const ARCHIVE_RECEIPT_TITLE_SELECTOR = "h1, h2, h3, [role='heading']";
+  const ARCHIVE_RECEIPT_ALLOWED_TITLE = "회계전표";
   const APPROVAL_GUARD_CONTAINER_SELECTOR = "tr, [role='row'], li, section, article, div";
   const SINGLE_APPROVAL_GUARD_NAME = "조경환";
   const APPROVAL_GUARD_NON_NAME_TOKENS = new Set([
@@ -1058,12 +1060,55 @@
     return normalizeText(el?.innerText || el?.textContent || "");
   }
 
-  function compactApprovalGuardText(value) {
+  function compactGuardText(value) {
     return String(value ?? "").replace(/\s+/g, "");
   }
 
   function isApprovalGuardLabelText(text) {
-    return compactApprovalGuardText(text) === "마감부서";
+    return compactGuardText(text) === "마감부서";
+  }
+
+  function getArchiveReceiptTitleWeight(el, text) {
+    const tagName = String(el?.tagName || "").toLowerCase();
+    const role = String(el?.getAttribute?.("role") || "").toLowerCase();
+    let weight = text.length;
+
+    if (tagName === "h1") {
+      weight -= 60;
+    } else if (tagName === "h2") {
+      weight -= 40;
+    } else if (tagName === "h3" || role === "heading") {
+      weight -= 20;
+    }
+
+    return weight;
+  }
+
+  function findArchiveReceiptGuardMatch(rootWindow = window) {
+    const matches = collectQuerySelectorAllDeep(ARCHIVE_RECEIPT_TITLE_SELECTOR, rootWindow)
+      .filter((el) => isVisibleForApprovalGuard(el))
+      .map((el) => ({
+        el,
+        text: getApprovalGuardText(el),
+        normalizedTitle: compactGuardText(getApprovalGuardText(el))
+      }))
+      .filter((entry) => entry.text)
+      .sort((a, b) => getArchiveReceiptTitleWeight(a.el, a.text) - getArchiveReceiptTitleWeight(b.el, b.text));
+
+    const matched = matches.find((entry) => entry.normalizedTitle === ARCHIVE_RECEIPT_ALLOWED_TITLE);
+    if (matched) {
+      return {
+        blocked: false,
+        detectedTitle: matched.text.slice(0, 200),
+        normalizedTitle: matched.normalizedTitle
+      };
+    }
+
+    return {
+      blocked: true,
+      detectedTitle: String(matches[0]?.text || "").slice(0, 200),
+      normalizedTitle: String(matches[0]?.normalizedTitle || "").slice(0, 200)
+    };
   }
 
   function extractApprovalGuardNameTokens(text) {
@@ -1121,7 +1166,7 @@
   }
 
   function shouldInspectApprovalGuardContainer(el, text) {
-    if (!text || !isApprovalGuardLabelText(text) && !compactApprovalGuardText(text).includes("마감부서")) {
+    if (!text || !isApprovalGuardLabelText(text) && !compactGuardText(text).includes("마감부서")) {
       return false;
     }
 
@@ -3225,6 +3270,14 @@
           return;
         }
 
+        if (message?.type === "CHECK_ARCHIVE_RECEIPT_GUARD") {
+          sendResponse({
+            ok: true,
+            ...findArchiveReceiptGuardMatch()
+          });
+          return;
+        }
+
         if (message?.type === "RUN_SINGLE_STEP") {
           const result = await runSingleStep(message.step, message.index || 0, {
             hideRunOverlay: !!message.hideRunOverlay,
@@ -3261,6 +3314,7 @@
       isElementNode,
       querySelectorDeep,
       collectQuerySelectorAllDeep,
+      findArchiveReceiptGuardMatch,
       findApprovalGuardMatch
     });
   }

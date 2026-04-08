@@ -240,10 +240,11 @@ function createApprovalGuardTable(cells = []) {
   return table;
 }
 
-function createApprovalGuardWindow({ containers = [], cells = [], frames = [] } = {}) {
+function createApprovalGuardWindow({ containers = [], cells = [], headings = [], frames = [] } = {}) {
   const document = {
     activeElement: null,
     defaultView: null,
+    title: "",
     querySelector() {
       return null;
     },
@@ -258,6 +259,10 @@ function createApprovalGuardWindow({ containers = [], cells = [], frames = [] } 
 
       if (selector === "td, th") {
         return cells;
+      }
+
+      if (selector === "h1, h2, h3, [role='heading']") {
+        return headings;
       }
 
       return [];
@@ -280,6 +285,9 @@ function createApprovalGuardWindow({ containers = [], cells = [], frames = [] } 
     entry.ownerDocument = document;
   });
   cells.forEach((entry) => {
+    entry.ownerDocument = document;
+  });
+  headings.forEach((entry) => {
     entry.ownerDocument = document;
   });
   frames.forEach((entry) => {
@@ -513,6 +521,34 @@ test("querySelectorDeep prefers iframe descendants over same-selector hidden inp
   frameElement.ownerDocument = topDocument;
 
   assert.equal(harness.hooks.querySelectorDeep("#userPassword", topWindow), childTarget);
+});
+
+test("findArchiveReceiptGuardMatch allows a spaced accounting voucher heading", () => {
+  const harness = loadContentHarness();
+  const heading = createApprovalGuardElement("H1", "회 계 전 표");
+  const topWindow = createApprovalGuardWindow({
+    headings: [heading]
+  });
+
+  assert.deepEqual(normalize(harness.hooks.findArchiveReceiptGuardMatch(topWindow)), {
+    blocked: false,
+    detectedTitle: "회 계 전 표",
+    normalizedTitle: "회계전표"
+  });
+});
+
+test("findArchiveReceiptGuardMatch blocks a non-accounting document heading", () => {
+  const harness = loadContentHarness();
+  const heading = createApprovalGuardElement("H1", "출장 신청서");
+  const topWindow = createApprovalGuardWindow({
+    headings: [heading]
+  });
+
+  assert.deepEqual(normalize(harness.hooks.findArchiveReceiptGuardMatch(topWindow)), {
+    blocked: true,
+    detectedTitle: "출장 신청서",
+    normalizedTitle: "출장신청서"
+  });
 });
 
 test("findApprovalGuardMatch blocks when a vertically rendered closing department cell leads to only 조경환", () => {

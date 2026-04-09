@@ -1340,8 +1340,50 @@
     return normalizeText(collectedTexts.join(" "));
   }
 
+  function findVoucherReviewDepartmentCell(rootWindow = window) {
+    const candidates = findApprovalGuardTableLabelCells(rootWindow, VOUCHER_REVIEW_DEPARTMENT_LABEL);
+    if (candidates.length <= 1) {
+      return candidates[0] || null;
+    }
+
+    const rankedCandidates = candidates
+      .map((cell, index) => {
+        const rect = getApprovalGuardRect(cell);
+        const hasHorizontalLayout = !!rect && rect.width >= rect.height;
+        const closestText = compactGuardText(collectClosestApprovalGuardTableRegionText(cell));
+        const left = rect?.left ?? Number.POSITIVE_INFINITY;
+        const top = rect?.top ?? Number.POSITIVE_INFINITY;
+        let score = 0;
+
+        if (hasHorizontalLayout) {
+          score += 1000;
+        }
+
+        if (closestText) {
+          score += 100;
+        }
+
+        if (Number.isFinite(left)) {
+          score -= Math.round(left);
+        }
+
+        if (Number.isFinite(top)) {
+          score -= Math.round(top / 10);
+        }
+
+        return {
+          cell,
+          index,
+          score
+        };
+      })
+      .sort((a, b) => b.score - a.score || a.index - b.index);
+
+    return rankedCandidates[0]?.cell || null;
+  }
+
   function findVoucherReviewGuardMatch(rootWindow = window) {
-    const departmentCell = findApprovalGuardTableLabelCells(rootWindow, VOUCHER_REVIEW_DEPARTMENT_LABEL)[0] || null;
+    const departmentCell = findVoucherReviewDepartmentCell(rootWindow);
     const reviewCell = findApprovalGuardTableLabelCells(rootWindow, VOUCHER_REVIEW_CONFIRM_LABEL)[0] || null;
 
     const departmentText = collectClosestApprovalGuardTableRegionText(departmentCell);

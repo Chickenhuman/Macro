@@ -985,6 +985,62 @@ async function startFixtureServer() {
       return;
     }
 
+    if (route === "/voucher-review-guard-duplicate-department-label.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        renderPage(
+          "Voucher Review Guard Duplicate Department Label",
+          `
+            <h1>회 계 전 표</h1>
+            <table border="1" cellpadding="6" cellspacing="0">
+              <tbody>
+                <tr>
+                  <td>문서번호</td>
+                  <td>재무기획팀-3165</td>
+                  <td rowspan="2">작<br>성<br>부<br>서</td>
+                  <td>팀원</td>
+                  <td>팀원</td>
+                  <td>팀장</td>
+                </tr>
+                <tr>
+                  <td>작성일자</td>
+                  <td>2026.03.16</td>
+                  <td>김상민</td>
+                  <td>김도영</td>
+                  <td>조영기</td>
+                </tr>
+                <tr>
+                  <td>작성부서</td>
+                  <td>재무기획팀</td>
+                  <td rowspan="2">전<br>표<br>확<br>인</td>
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td>작성자</td>
+                  <td>김상민</td>
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="PUDD PUDD-COLOR-blue PUDD-UI-Button">
+              <input id="approvalLineBtn" type="button" value="결재라인지정" onclick="openApprovalLine();" />
+            </div>
+            <div id="result"></div>
+          `,
+          `
+            window.openApprovalLine = function() {
+              document.querySelector("#result").textContent = "approval-line-opened";
+            };
+          `
+        )
+      );
+      return;
+    }
+
     if (route === "/synthetic-mousedown-sensitive.html") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
@@ -2412,6 +2468,29 @@ test.describe("extension smoke tests", () => {
   test("allows archive receipt flow when finance department has no voucher reviewer", async () => {
     const runPage = await bundle.context.newPage();
     await runPage.goto(`${server.baseUrl}/voucher-review-guard-allowed.html`);
+
+    const runTabId = await findTabId(extensionPage, runPage.url());
+    expect(runTabId).toBeTruthy();
+
+    const runResponse = await sendRuntimeMessage(extensionPage, {
+      type: "START_MACRO_RUN",
+      tabId: runTabId,
+      steps: [
+        {
+          type: "click",
+          selector: "#approvalLineBtn",
+          label: "결재라인지정"
+        }
+      ]
+    });
+    expect(runResponse.ok).toBe(true);
+
+    await expect(runPage.locator("#result")).toHaveText("approval-line-opened");
+  });
+
+  test("allows archive receipt flow when the real department row is duplicated elsewhere in the form", async () => {
+    const runPage = await bundle.context.newPage();
+    await runPage.goto(`${server.baseUrl}/voucher-review-guard-duplicate-department-label.html`);
 
     const runTabId = await findTabId(extensionPage, runPage.url());
     expect(runTabId).toBeTruthy();

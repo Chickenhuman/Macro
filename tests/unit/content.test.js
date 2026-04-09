@@ -619,6 +619,72 @@ test("findVoucherReviewGuardMatch allows finance department documents without vo
   });
 });
 
+test("findVoucherReviewGuardMatch prefers the horizontal department row when 작성부서 appears twice", () => {
+  const harness = loadContentHarness();
+  const duplicateDepartmentLabelCell = createApprovalGuardElement("TD", "작\n성\n부\n서", {
+    left: 220,
+    top: 0,
+    width: 20,
+    height: 120
+  });
+  const firstApproverRoleCell = createApprovalGuardElement("TD", "팀원", {
+    left: 241,
+    top: 0,
+    width: 50,
+    height: 40
+  });
+  const firstApproverNameCell = createApprovalGuardElement("TD", "김상민", {
+    left: 241,
+    top: 60,
+    width: 60,
+    height: 20
+  });
+  const departmentLabelCell = createApprovalGuardElement("TD", "작성부서", {
+    left: 0,
+    top: 120,
+    width: 80,
+    height: 24
+  });
+  const departmentValueCell = createApprovalGuardElement("TD", "재무기획팀", {
+    left: 81,
+    top: 120,
+    width: 120,
+    height: 24
+  });
+  const reviewLabelCell = createApprovalGuardElement("TD", "전 표 확 인", {
+    left: 320,
+    top: 0,
+    width: 20,
+    height: 120
+  });
+  createApprovalGuardTable([
+    duplicateDepartmentLabelCell,
+    firstApproverRoleCell,
+    firstApproverNameCell,
+    departmentLabelCell,
+    departmentValueCell,
+    reviewLabelCell
+  ]);
+  const topWindow = createApprovalGuardWindow({
+    cells: [
+      duplicateDepartmentLabelCell,
+      firstApproverRoleCell,
+      firstApproverNameCell,
+      departmentLabelCell,
+      departmentValueCell,
+      reviewLabelCell
+    ]
+  });
+
+  assert.deepEqual(normalize(harness.hooks.findVoucherReviewGuardMatch(topWindow)), {
+    blocked: false,
+    department: "재무기획팀",
+    normalizedDepartment: "재무기획팀",
+    reviewText: "",
+    reviewerNames: []
+  });
+});
+
 test("findVoucherReviewGuardMatch allows non-finance department documents when voucher reviewer exists", () => {
   const harness = loadContentHarness();
   const departmentLabelCell = createApprovalGuardElement("TD", "작성부서", {

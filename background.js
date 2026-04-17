@@ -2188,6 +2188,11 @@ function scorePopupCandidate(tab, runState, step, options = {}) {
   if (tab.id === runState.currentTabId) return -1;
 
   const allowSameOriginFallback = options.allowSameOriginFallback !== false;
+  const knownAtWaitStart = new Set(runState.knownTabIdsAtWaitStart || []);
+  if (options.excludeKnownAtWaitStart && knownAtWaitStart.has(tab.id)) {
+    return -1;
+  }
+
   const expected = String(step.urlIncludes || "").trim();
   if (expected && !(tab.url || "").includes(expected)) {
     return -1;
@@ -2207,7 +2212,6 @@ function scorePopupCandidate(tab, runState, step, options = {}) {
     matchedRelationship = true;
   }
 
-  const knownAtWaitStart = new Set(runState.knownTabIdsAtWaitStart || []);
   const sameOriginOtherWindow =
     runState.rootWindowId != null &&
     tab.windowId !== runState.rootWindowId &&
@@ -2419,8 +2423,33 @@ async function restoreRunToPreviousTab(runState, closedTabId) {
 async function handleWaitForPopupStep(runState, step) {
   const tabs = await chrome.tabs.query({});
   const hasPreStepKnownTabs = (runState.knownTabIdsAtWaitStart || []).length > 0;
+  const currentTab = (tabs || []).find((candidate) => candidate?.id === runState.currentTabId) || null;
+  const expectedUrl = String(step.urlIncludes || "").trim();
+  const currentUrl = String(currentTab?.url || "");
+  const currentPendingUrl = String(currentTab?.pendingUrl || "");
+
+  if (currentTab && (!expectedUrl || currentUrl.includes(expectedUrl) || currentPendingUrl.includes(expectedUrl))) {
+    await appendRunTraceLog({
+      source: "run:background",
+      eventType: "wait-for-popup-current-tab-immediate-match",
+      tabId: currentTab.id,
+      stepIndex: runState.stepIndex,
+      stepType: "waitForPopup",
+      message: `현재 탭이 이미 대기 조건과 일치: ${currentTab.url || currentTab.id}`,
+      step,
+      detail: {
+        tab: summarizeTabForTrace(currentTab)
+      }
+    });
+
+    await completeWaitForCurrentRunTab(runState, currentTab);
+    return;
+  }
+
+  const hasPendingPopupTabs = (runState.pendingPopupTabIds || []).some(isFiniteTabId);
   const traceOptions = {
-    allowSameOriginFallback: hasPreStepKnownTabs
+    allowSameOriginFallback: hasPreStepKnownTabs,
+    excludeKnownAtWaitStart: hasPreStepKnownTabs && hasPendingPopupTabs
   };
   const candidateTrace = collectPopupCandidatesForTrace(tabs, runState, step, traceOptions);
   await appendRunTraceLog({
@@ -2438,7 +2467,8 @@ async function handleWaitForPopupStep(runState, step) {
     }
   });
   const found = findBestPopupCandidate(tabs, runState, step, {
-    allowSameOriginFallback: hasPreStepKnownTabs
+    allowSameOriginFallback: hasPreStepKnownTabs,
+    excludeKnownAtWaitStart: hasPreStepKnownTabs && hasPendingPopupTabs
   });
 
   if (found) {

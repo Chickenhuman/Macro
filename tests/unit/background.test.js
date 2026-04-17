@@ -1307,6 +1307,146 @@ test("handleRunRelatedTab completes waitForPopup when the current tab reloads to
   assert.equal(continuedState.lastMessage.includes("현재 탭 새로고침 완료"), true);
 });
 
+test("handleWaitForPopupStep waits for a pending new popup instead of switching to an older matching tab", async () => {
+  const harness = loadBackgroundHarness();
+  let continued = false;
+
+  harness.tabs.set(1, {
+    id: 1,
+    url: "https://example.com/gw/bizbox.do",
+    windowId: 10,
+    status: "complete",
+    active: true
+  });
+  harness.tabs.set(2, {
+    id: 2,
+    url: "https://example.com/ea/edoc/eapproval/docCommonDraftView.do?diKeyCode=308617",
+    openerTabId: 1,
+    windowId: 11,
+    status: "complete",
+    active: true
+  });
+  harness.tabs.set(3, {
+    id: 3,
+    url: "",
+    pendingUrl: "",
+    openerTabId: 4,
+    windowId: 12,
+    status: "complete",
+    active: true
+  });
+
+  harness.context.continueMacroRun = async () => {
+    continued = true;
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "waitForPopup",
+        urlIncludes: "docCommonDraftView.do",
+        timeout: 10000
+      }
+    ],
+    stepIndex: 0,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "새 창 대기 시작 전",
+    error: "",
+    pendingPopupTabIds: [3],
+    knownTabIdsAtWaitStart: [1, 2, 4],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.handleWaitForPopupStep(
+    harness.storage.macroRunState,
+    harness.storage.macroRunState.steps[0]
+  );
+
+  assert.equal(continued, false);
+  assert.equal(harness.storage.macroRunState.currentTabId, 1);
+  assert.equal(harness.storage.macroRunState.waitingForPopup, true);
+  assert.equal(harness.storage.macroRunState.popupUrlIncludes, "docCommonDraftView.do");
+});
+
+test("handleWaitForPopupStep completes immediately when the current tab already matches the expected URL", async () => {
+  const harness = loadBackgroundHarness();
+  let continuedState = null;
+
+  harness.tabs.set(1, {
+    id: 1,
+    url: "https://example.com/docCommonDraftView.do?firstApproval=Y",
+    windowId: 10,
+    status: "complete"
+  });
+
+  harness.context.continueMacroRun = async (state) => {
+    continuedState = normalize(state);
+  };
+
+  harness.storage.macroRunState = {
+    running: true,
+    rootTabId: 1,
+    rootWindowId: 10,
+    rootOrigin: "https://example.com",
+    rootHostname: "example.com",
+    currentTabId: 1,
+    currentFrameId: 0,
+    currentTabTrail: [],
+    steps: [
+      {
+        type: "click",
+        selector: "#btnConfirm",
+        label: "확인"
+      },
+      {
+        type: "waitForPopup",
+        urlIncludes: "docCommonDraftView.do",
+        timeout: 10000
+      },
+      {
+        type: "click",
+        selector: "#next",
+        label: "다음"
+      }
+    ],
+    stepIndex: 1,
+    waitingForPopup: false,
+    popupUrlIncludes: "",
+    popupTimeout: 0,
+    popupWaitStartedAt: 0,
+    lastMessage: "새 창 대기 시작 전",
+    error: "",
+    pendingPopupTabIds: [],
+    knownTabIdsAtWaitStart: [1],
+    activeStepIndex: -1,
+    activeStepType: "",
+    activeStepTabId: null
+  };
+
+  await harness.context.handleWaitForPopupStep(
+    harness.storage.macroRunState,
+    harness.storage.macroRunState.steps[1]
+  );
+
+  assert.equal(continuedState.stepIndex, 2);
+  assert.equal(continuedState.currentTabId, 1);
+  assert.equal(continuedState.waitingForPopup, false);
+  assert.equal(continuedState.lastMessage.includes("현재 탭 새로고침 완료"), true);
+});
+
 test("continueMacroRun repeats the full macro for the requested repeat count", async () => {
   const harness = loadBackgroundHarness();
   let runSingleStepCalls = 0;
